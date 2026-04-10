@@ -25,7 +25,6 @@ ACP_MARKER_BASE_URL = "acp://copilot"
 _DEFAULT_TIMEOUT_SECONDS = 900.0
 
 _TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
-_TOOL_CALL_JSON_RE = re.compile(r"\{\s*\"id\"\s*:\s*\"[^\"]+\"\s*,\s*\"type\"\s*:\s*\"function\"\s*,\s*\"function\"\s*:\s*\{.*?\}\s*\}", re.DOTALL)
 
 
 def _resolve_command() -> str:
@@ -153,6 +152,45 @@ def _render_message_content(content: Any) -> str:
     return str(content).strip()
 
 
+def _iter_balanced_json_objects(text: str) -> list[str]:
+    """Extract top-level balanced JSON object spans from text."""
+    objects: list[str] = []
+    start: int | None = None
+    depth = 0
+    in_string = False
+    escape = False
+
+    for index, ch in enumerate(text):
+        if start is None:
+            if ch == "{":
+                start = index
+                depth = 1
+                in_string = False
+                escape = False
+            continue
+
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                objects.append(text[start : index + 1])
+                start = None
+
+    return objects
+
+
 def _extract_tool_calls_from_text(text: str) -> tuple[list[SimpleNamespace], str]:
     if not isinstance(text, str) or not text.strip():
         return [], ""
@@ -197,10 +235,13 @@ def _extract_tool_calls_from_text(text: str) -> tuple[list[SimpleNamespace], str
 
     # Only try bare-JSON fallback when no XML blocks were found.
     if not extracted:
-        for m in _TOOL_CALL_JSON_RE.finditer(text):
-            raw = m.group(0)
-            _try_add_tool_call(raw)
-            consumed_spans.append((m.start(), m.end()))
+        for raw_json in _iter_balanced_json_objects(text):
+            _try_add_tool_call(raw_json)
+            # Best-effort span removal: use the first matching slice so the
+            # cleaned text drops the JSON object even when nested braces exist.
+            start = text.find(raw_json)
+            if start >= 0:
+                consumed_spans.append((start, start + len(raw_json)))
 
     if not consumed_spans:
         return extracted, text.strip()
