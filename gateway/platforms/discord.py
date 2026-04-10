@@ -2537,7 +2537,7 @@ class DiscordAdapter(BasePlatformAdapter):
         # Only batch plain text messages — commands, media, etc. dispatch
         # immediately since they won't be split by the Discord client.
         if msg_type == MessageType.TEXT and self._text_batch_delay_seconds > 0:
-            self._enqueue_text_event(event)
+            await self._enqueue_text_event(event)
         else:
             await self.handle_message(event)
 
@@ -2554,7 +2554,7 @@ class DiscordAdapter(BasePlatformAdapter):
             thread_sessions_per_user=self.config.extra.get("thread_sessions_per_user", False),
         )
 
-    def _enqueue_text_event(self, event: MessageEvent) -> None:
+    async def _enqueue_text_event(self, event: MessageEvent) -> None:
         """Buffer a text event and reset the flush timer.
 
         When Discord splits a long user message at 2000 chars, the chunks

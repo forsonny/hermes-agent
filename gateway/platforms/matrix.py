@@ -1106,7 +1106,7 @@ class MatrixAdapter(BasePlatformAdapter):
 
         # Only batch plain text messages — commands dispatch immediately.
         if msg_type == MessageType.TEXT and self._text_batch_delay_seconds > 0:
-            self._enqueue_text_event(msg_event)
+            await self._enqueue_text_event(msg_event)
         else:
             await self.handle_message(msg_event)
 
@@ -1123,7 +1123,7 @@ class MatrixAdapter(BasePlatformAdapter):
             thread_sessions_per_user=self.config.extra.get("thread_sessions_per_user", False),
         )
 
-    def _enqueue_text_event(self, event: MessageEvent) -> None:
+    async def _enqueue_text_event(self, event: MessageEvent) -> None:
         """Buffer a text event and reset the flush timer.
 
         When a Matrix client splits a long message, the chunks arrive within
