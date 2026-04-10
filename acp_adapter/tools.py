@@ -40,6 +40,7 @@ TOOL_KIND_MAP: Dict[str, ToolKind] = {
     "browser_press": "execute",
     "browser_back": "execute",
     "browser_get_images": "read",
+    "browser_console": "execute",
     # Agent internals
     "delegate_task": "execute",
     "vision_analyze": "read",
@@ -47,6 +48,34 @@ TOOL_KIND_MAP: Dict[str, ToolKind] = {
     "text_to_speech": "execute",
     # Thinking / meta
     "_thinking": "think",
+    # Agent meta-tools (memory, planning, skills)
+    "memory": "think",
+    "todo": "think",
+    "clarify": "think",
+    "session_search": "search",
+    "skill_view": "read",
+    "skill_manage": "edit",
+    "skills_list": "read",
+    "send_message": "execute",
+    "cronjob": "execute",
+    # Multi-agent
+    "mixture_of_agents": "execute",
+    # Smart home
+    "ha_call_service": "execute",
+    "ha_get_state": "read",
+    "ha_list_entities": "read",
+    "ha_list_services": "read",
+    # RL training
+    "rl_check_status": "read",
+    "rl_edit_config": "edit",
+    "rl_get_current_config": "read",
+    "rl_get_results": "read",
+    "rl_list_environments": "read",
+    "rl_list_runs": "read",
+    "rl_select_environment": "execute",
+    "rl_start_training": "execute",
+    "rl_stop_training": "execute",
+    "rl_test_inference": "execute",
 }
 
 
@@ -93,6 +122,38 @@ def build_tool_title(tool_name: str, args: Dict[str, Any]) -> str:
         return "execute code"
     if tool_name == "vision_analyze":
         return f"analyze image: {args.get('question', '?')[:50]}"
+    if tool_name == "memory":
+        action = args.get("action", "")
+        return f"memory: {action}" if action else "memory"
+    if tool_name == "todo":
+        return "todo list" if not args.get("todos") else "update todo"
+    if tool_name == "clarify":
+        return f"clarify: {args.get('question', '')[:60]}"
+    if tool_name == "session_search":
+        query = args.get("query", "")
+        return f"session search: {query[:50]}" if query else "session search"
+    if tool_name == "skill_view":
+        return f"skill: {args.get('name', '?')}"
+    if tool_name == "skill_manage":
+        return f"skill {args.get('action', '?')}: {args.get('name', '')}"
+    if tool_name == "skills_list":
+        return "list skills"
+    if tool_name == "send_message":
+        return "send message"
+    if tool_name == "cronjob":
+        return f"cron: {args.get('action', '?')}"
+    if tool_name == "browser_console":
+        expr = args.get("expression", "")
+        if expr:
+            return f"console: {expr[:50]}"
+        return "browser console"
+    if tool_name.startswith("ha_"):
+        parts = tool_name.split("_", 1)
+        return parts[1] if len(parts) > 1 else tool_name
+    if tool_name.startswith("rl_"):
+        return tool_name[3:].replace("_", " ")
+    if tool_name == "mixture_of_agents":
+        return "mixture of agents"
     return tool_name
 
 
