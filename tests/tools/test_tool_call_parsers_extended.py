@@ -575,6 +575,162 @@ class TestQwen3CoderParser:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Mistral parser edge case tests
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestMistralParserEdgeCases:
+    """Extended edge-case coverage for the Mistral tool call parser.
+
+    The Mistral parser supports two formats:
+    - Pre-v11: [TOOL_CALLS] [JSON array of tool calls]
+    - V11+:    [TOOL_CALLS]tool_name{args}[TOOL_CALLS]tool_name{args}
+    """
+
+    @pytest.fixture
+    def parser(self):
+        return get_parser("mistral")
+
+    # --- Pre-v11 edge cases ---
+
+    def test_pre_v11_single_dict_not_array(self, parser):
+        """Pre-v11 with a single dict (not wrapped in array)."""
+        text = '[TOOL_CALLS] {"name": "search", "arguments": {"query": "test"}}'
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == "search"
+
+    def test_pre_v11_multiple_in_array(self, parser):
+        """Pre-v11 with multiple tool calls in a JSON array."""
+        text = (
+            '[TOOL_CALLS] ['
+            '{"name": "func_a", "arguments": {"x": 1}},'
+            '{"name": "func_b", "arguments": {"y": 2}}'
+            ']'
+        )
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        assert len(tool_calls) == 2
+        names = {tc.function.name for tc in tool_calls}
+        assert names == {"func_a", "func_b"}
+
+    def test_pre_v11_arguments_as_string(self, parser):
+        """Pre-v11 where arguments is already a JSON string, not a dict."""
+        text = '[TOOL_CALLS] [{"name": "func", "arguments": "{\\"key\\": \\"val\\"}"}]'
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == "func"
+        # Arguments should be passed through as-is when not a dict
+        assert "key" in tool_calls[0].function.arguments
+
+    def test_pre_v11_malformed_json_triggers_fallback(self, parser):
+        """Pre-v11 with partially malformed JSON should use raw_decode fallback."""
+        # Extra text after the JSON array
+        text = '[TOOL_CALLS] [{"name": "func", "arguments": {"a": 1}}] extra junk'
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        assert len(tool_calls) >= 1
+        assert tool_calls[0].function.name == "func"
+
+    def test_pre_v11_missing_name_key_skipped(self, parser):
+        """Pre-v11 JSON without 'name' key should be skipped."""
+        text = '[TOOL_CALLS] [{"arguments": {"a": 1}}]'
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is None
+
+    # --- V11+ edge cases ---
+
+    def test_v11_empty_arguments(self, parser):
+        """V11 with empty argument object."""
+        text = '[TOOL_CALLS]do_nothing{}'
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == "do_nothing"
+        args = json.loads(tool_calls[0].function.arguments)
+        assert args == {}
+
+    def test_v11_no_braces_skipped(self, parser):
+        """V11 text after [TOOL_CALLS] with no '{' should be skipped."""
+        text = "[TOOL_CALLS] just_a_name_no_braces"
+        content, tool_calls = parser.parse(text)
+        # No brace means the raw is skipped (line 63: if '{' not in raw)
+        assert tool_calls is None
+
+    def test_v11_tool_call_ids_unique(self, parser):
+        """Multiple v11 tool calls should each get a unique ID."""
+        text = (
+            '[TOOL_CALLS]func1{"a": 1}'
+            '[TOOL_CALLS]func2{"b": 2}'
+            '[TOOL_CALLS]func3{"c": 3}'
+        )
+        _, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        assert len(tool_calls) == 3
+        ids = [tc.id for tc in tool_calls]
+        assert len(ids) == len(set(ids)), "Tool call IDs must be unique"
+
+    def test_v11_malformed_json_kept_raw(self, parser):
+        """V11 with invalid JSON arguments should keep the raw string."""
+        text = '[TOOL_CALLS]my_func{not valid json}'
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == "my_func"
+        # JSON parse failure means args are kept as raw string
+        assert "not valid json" in tool_calls[0].function.arguments
+
+    def test_v11_with_content_before_and_after(self, parser):
+        """V11 with text before and after tool calls."""
+        text = (
+            'I will search for that.\n'
+            '[TOOL_CALLS]search{"query": "python"}\n'
+            'Let me also read a file.'
+        )
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        assert tool_calls[0].function.name == "search"
+        assert content is not None
+        assert "search for that" in content
+
+    def test_v11_multiline_arguments(self, parser):
+        """V11 with multi-line JSON arguments."""
+        text = (
+            '[TOOL_CALLS]create_file{"path": "test.py",\n'
+            '  "content": "print(\\"hello\\")"}'
+        )
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        assert tool_calls[0].function.name == "create_file"
+        args = json.loads(tool_calls[0].function.arguments)
+        assert args["path"] == "test.py"
+
+    def test_v11_empty_raw_skipped(self, parser):
+        """V11 with empty string after [TOOL_CALLS] should be skipped."""
+        text = "Hello[TOOL_CALLS][TOOL_CALLS]func{}}"
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == "func"
+
+    def test_only_bot_token_no_content(self, parser):
+        """Just [TOOL_CALLS] with nothing else."""
+        text = "[TOOL_CALLS]"
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is None
+
+    def test_v11_unicode_in_arguments(self, parser):
+        """V11 with unicode characters in arguments."""
+        text = '[TOOL_CALLS]greet{"message": "こんにちは世界"}'
+        content, tool_calls = parser.parse(text)
+        assert tool_calls is not None
+        args = json.loads(tool_calls[0].function.arguments)
+        assert args["message"] == "こんにちは世界"
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Cross-parser contract tests — applies to ALL parsers
 # ═══════════════════════════════════════════════════════════════════════
 

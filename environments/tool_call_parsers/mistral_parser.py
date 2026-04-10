@@ -103,25 +103,30 @@ class MistralToolCallParser(ToolCallParser):
                             )
                         )
                 except json.JSONDecodeError:
-                    # Fallback: extract JSON objects using raw_decode
+                    # Fallback: extract JSON objects using raw_decode.
+                    # Handles both individual dicts and arrays of tool calls
+                    # when trailing garbage prevents json.loads from succeeding.
                     decoder = json.JSONDecoder()
                     idx = 0
                     while idx < len(first_raw):
                         try:
                             obj, end_idx = decoder.raw_decode(first_raw, idx)
-                            if isinstance(obj, dict) and "name" in obj:
-                                args = obj.get("arguments", {})
-                                if isinstance(args, dict):
-                                    args = json.dumps(args, ensure_ascii=False)
-                                tool_calls.append(
-                                    ChatCompletionMessageToolCall(
-                                        id=_generate_mistral_id(),
-                                        type="function",
-                                        function=Function(
-                                            name=obj["name"], arguments=args
-                                        ),
+                            # Normalize to a list of tool call dicts
+                            items = obj if isinstance(obj, list) else [obj]
+                            for item in items:
+                                if isinstance(item, dict) and "name" in item:
+                                    args = item.get("arguments", {})
+                                    if isinstance(args, dict):
+                                        args = json.dumps(args, ensure_ascii=False)
+                                    tool_calls.append(
+                                        ChatCompletionMessageToolCall(
+                                            id=_generate_mistral_id(),
+                                            type="function",
+                                            function=Function(
+                                                name=item["name"], arguments=args
+                                            ),
+                                        )
                                     )
-                                )
                             idx = end_idx
                         except json.JSONDecodeError:
                             idx += 1

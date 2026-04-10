@@ -108,12 +108,11 @@ class TestMemoryManagerUserIdThreading:
 
         assert "user_id" not in p._init_kwargs
 
-    def test_multiple_providers_all_receive_user_id(self):
-        from agent.builtin_memory_provider import BuiltinMemoryProvider
-
+    def test_builtin_plus_external_both_receive_user_id(self):
+        """A builtin provider and one external both receive user_id."""
         mgr = MemoryManager()
-        # Use builtin + one external (MemoryManager only allows one external)
-        builtin = BuiltinMemoryProvider()
+        # "builtin" name is always accepted by MemoryManager
+        builtin = RecordingProvider("builtin")
         ext = RecordingProvider("external")
         mgr.add_provider(builtin)
         mgr.add_provider(ext)
@@ -124,8 +123,22 @@ class TestMemoryManagerUserIdThreading:
             user_id="slack_U12345",
         )
 
+        assert builtin._init_kwargs.get("user_id") == "slack_U12345"
+        assert builtin._init_kwargs.get("platform") == "slack"
         assert ext._init_kwargs.get("user_id") == "slack_U12345"
         assert ext._init_kwargs.get("platform") == "slack"
+
+    def test_second_external_rejected(self):
+        """Adding a second external provider should be rejected."""
+        mgr = MemoryManager()
+        p1 = RecordingProvider("ext1")
+        p2 = RecordingProvider("ext2")
+        mgr.add_provider(p1)
+        mgr.add_provider(p2)  # Should be rejected
+
+        # Only the first provider should be registered
+        names = [p.name for p in mgr._providers]
+        assert names == ["ext1"]
 
 
 # ---------------------------------------------------------------------------
