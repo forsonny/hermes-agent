@@ -2486,6 +2486,11 @@ class FeishuAdapter(BasePlatformAdapter):
 
     async def _enqueue_text_event(self, event: MessageEvent) -> None:
         """Debounce rapid Feishu text bursts into a single MessageEvent."""
+        # Bypass batching when delay <= 0 (e.g. in tests).
+        if self._text_batch_delay_seconds <= 0:
+            await self.handle_message(event)
+            return
+
         key = self._text_batch_key(event)
         chunk_len = len(event.text or "")
         existing = self._pending_text_batches.get(key)

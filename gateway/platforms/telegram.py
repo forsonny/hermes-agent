@@ -2092,7 +2092,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
         event = self._build_message_event(update.message, MessageType.TEXT)
         event.text = self._clean_bot_trigger_text(event.text)
-        self._enqueue_text_event(event)
+        await self._enqueue_text_event(event)
     
     async def _handle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming command messages."""
@@ -2154,7 +2154,7 @@ class TelegramAdapter(BasePlatformAdapter):
             thread_sessions_per_user=self.config.extra.get("thread_sessions_per_user", False),
         )
 
-    def _enqueue_text_event(self, event: MessageEvent) -> None:
+    async def _enqueue_text_event(self, event: MessageEvent) -> None:
         """Buffer a text event and reset the flush timer.
 
         When Telegram splits a long user message into multiple updates,
@@ -2162,6 +2162,11 @@ class TelegramAdapter(BasePlatformAdapter):
         concatenates them and waits for a short quiet period before
         dispatching the combined message.
         """
+        # Bypass batching when delay <= 0 (e.g. in tests).
+        if self._text_batch_delay_seconds <= 0:
+            await self.handle_message(event)
+            return
+
         key = self._text_batch_key(event)
         existing = self._pending_text_batches.get(key)
         chunk_len = len(event.text or "")
