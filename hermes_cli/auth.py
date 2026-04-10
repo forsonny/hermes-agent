@@ -198,6 +198,14 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         api_key_env_vars=("DEEPSEEK_API_KEY",),
         base_url_env_var="DEEPSEEK_BASE_URL",
     ),
+    "xai": ProviderConfig(
+        id="xai",
+        name="xAI",
+        auth_type="api_key",
+        inference_base_url="https://api.x.ai/v1",
+        api_key_env_vars=("XAI_API_KEY",),
+        base_url_env_var="XAI_BASE_URL",
+    ),
     "ai-gateway": ProviderConfig(
         id="ai-gateway",
         name="AI Gateway",
@@ -890,7 +898,7 @@ def resolve_provider(
     _PROVIDER_ALIASES = {
         "glm": "zai", "z-ai": "zai", "z.ai": "zai", "zhipu": "zai",
         "google": "gemini", "google-gemini": "gemini", "google-ai-studio": "gemini",
-        "kimi": "kimi-coding", "moonshot": "kimi-coding",
+        "kimi": "kimi-coding", "kimi-for-coding": "kimi-coding", "moonshot": "kimi-coding",
         "minimax-china": "minimax-cn", "minimax_cn": "minimax-cn",
         "claude": "anthropic", "claude-code": "anthropic",
         "github": "copilot", "github-copilot": "copilot",

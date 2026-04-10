@@ -947,6 +947,7 @@ class AIAgent:
                     client_kwargs["default_headers"] = headers
 
             self.api_key = client_kwargs.get("api_key", "")
+            self.base_url = client_kwargs.get("base_url", self.base_url)
             try:
                 self.client = self._create_openai_client(client_kwargs, reason="agent_init", shared=True)
                 if not self.quiet_mode:
@@ -3020,7 +3021,7 @@ class AIAgent:
 
     @staticmethod
     def _cap_delegate_task_calls(tool_calls: list) -> list:
-        """Truncate excess delegate_task calls to MAX_CONCURRENT_CHILDREN.
+        """Truncate excess delegate_task calls to max_concurrent_children.
 
         The delegate_tool caps the task list inside a single call, but the
         model can emit multiple separate delegate_task tool_calls in one
@@ -3028,23 +3029,24 @@ class AIAgent:
 
         Returns the original list if no truncation was needed.
         """
-        from tools.delegate_tool import MAX_CONCURRENT_CHILDREN
+        from tools.delegate_tool import _get_max_concurrent_children
+        max_children = _get_max_concurrent_children()
         delegate_count = sum(1 for tc in tool_calls if tc.function.name == "delegate_task")
-        if delegate_count <= MAX_CONCURRENT_CHILDREN:
+        if delegate_count <= max_children:
             return tool_calls
         kept_delegates = 0
         truncated = []
         for tc in tool_calls:
             if tc.function.name == "delegate_task":
-                if kept_delegates < MAX_CONCURRENT_CHILDREN:
+                if kept_delegates < max_children:
                     truncated.append(tc)
                     kept_delegates += 1
             else:
                 truncated.append(tc)
         logger.warning(
             "Truncated %d excess delegate_task call(s) to enforce "
-            "MAX_CONCURRENT_CHILDREN=%d limit",
-            delegate_count - MAX_CONCURRENT_CHILDREN, MAX_CONCURRENT_CHILDREN,
+            "max_concurrent_children=%d limit",
+            delegate_count - max_children, max_children,
         )
         return truncated
 
@@ -7706,6 +7708,7 @@ class AIAgent:
 
             finish_reason = "stop"
             response = None  # Guard against UnboundLocalError if all retries fail
+            api_kwargs = None  # Guard against UnboundLocalError in except handler
 
             while retry_count < max_retries:
                 try:
@@ -8740,9 +8743,10 @@ class AIAgent:
                         if self._try_activate_fallback():
                             retry_count = 0
                             continue
-                        self._dump_api_request_debug(
-                            api_kwargs, reason="non_retryable_client_error", error=api_error,
-                        )
+                        if api_kwargs is not None:
+                            self._dump_api_request_debug(
+                                api_kwargs, reason="non_retryable_client_error", error=api_error,
+                            )
                         self._emit_status(
                             f"❌ Non-retryable error (HTTP {status_code}): "
                             f"{self._summarize_api_error(api_error)}"
@@ -8845,9 +8849,10 @@ class AIAgent:
                             self.log_prefix, max_retries, _final_summary,
                             _provider, _model, len(api_messages), f"{approx_tokens:,}",
                         )
-                        self._dump_api_request_debug(
-                            api_kwargs, reason="max_retries_exhausted", error=api_error,
-                        )
+                        if api_kwargs is not None:
+                            self._dump_api_request_debug(
+                                api_kwargs, reason="max_retries_exhausted", error=api_error,
+                            )
                         self._persist_session(messages, conversation_history)
                         _final_response = f"API call failed after {max_retries} retries: {_final_summary}"
                         if _is_stream_drop:
