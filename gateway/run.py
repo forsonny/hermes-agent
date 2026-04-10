@@ -5274,27 +5274,76 @@ class GatewayRunner:
         )
 
     async def _handle_usage_command(self, event: MessageEvent) -> str:
-        """Handle /usage command -- show token usage for the session's last agent run."""
+        """Handle /usage command -- show token usage for the current session.
+
+        Checks both _running_agents (mid-turn) and _agent_cache (between turns)
+        so that rate limits, cost estimates, and detailed token breakdowns are
+        available whenever the user asks, not only while the agent is running.
+        """
         source = event.source
         session_key = self._session_key_for_source(source)
 
+        # Try running agent first (mid-turn), then cached agent (between turns)
         agent = self._running_agents.get(session_key)
+        if not agent or agent is _AGENT_PENDING_SENTINEL:
+            _cache_lock = getattr(self, "_agent_cache_lock", None)
+            _cache = getattr(self, "_agent_cache", None)
+            if _cache_lock and _cache is not None:
+                with _cache_lock:
+                    cached = _cache.get(session_key)
+                    if cached:
+                        agent = cached[0]
+
         if agent and hasattr(agent, "session_total_tokens") and agent.session_api_calls > 0:
             lines = []
 
-            # Rate limits first (when available from provider headers)
+            # Rate limits (when available from provider headers)
             rl_state = agent.get_rate_limit_state()
             if rl_state and rl_state.has_data:
                 from agent.rate_limit_tracker import format_rate_limit_compact
                 lines.append(f"⏱️ **Rate Limits:** {format_rate_limit_compact(rl_state)}")
                 lines.append("")
 
-            # Session token usage
+            # Session token usage — detailed breakdown matching CLI
+            input_tokens = getattr(agent, "session_input_tokens", 0) or 0
+            output_tokens = getattr(agent, "session_output_tokens", 0) or 0
+            cache_read = getattr(agent, "session_cache_read_tokens", 0) or 0
+            cache_write = getattr(agent, "session_cache_write_tokens", 0) or 0
+
             lines.append("📊 **Session Token Usage**")
-            lines.append(f"Prompt (input): {agent.session_prompt_tokens:,}")
-            lines.append(f"Completion (output): {agent.session_completion_tokens:,}")
+            lines.append(f"Model: `{agent.model}`")
+            lines.append(f"Input tokens: {input_tokens:,}")
+            if cache_read:
+                lines.append(f"Cache read tokens: {cache_read:,}")
+            if cache_write:
+                lines.append(f"Cache write tokens: {cache_write:,}")
+            lines.append(f"Output tokens: {output_tokens:,}")
             lines.append(f"Total: {agent.session_total_tokens:,}")
             lines.append(f"API calls: {agent.session_api_calls}")
+
+            # Cost estimation
+            try:
+                from agent.usage_pricing import CanonicalUsage, estimate_usage_cost
+                cost_result = estimate_usage_cost(
+                    agent.model,
+                    CanonicalUsage(
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cache_read_tokens=cache_read,
+                        cache_write_tokens=cache_write,
+                    ),
+                    provider=getattr(agent, "provider", None),
+                    base_url=getattr(agent, "base_url", None),
+                )
+                if cost_result.amount_usd is not None:
+                    prefix = "~" if cost_result.status == "estimated" else ""
+                    lines.append(f"Cost: {prefix}${float(cost_result.amount_usd):.4f}")
+                elif cost_result.status == "included":
+                    lines.append("Cost: included")
+            except Exception:
+                pass
+
+            # Context window and compressions
             ctx = agent.context_compressor
             if ctx.last_prompt_tokens:
                 pct = min(100, ctx.last_prompt_tokens / ctx.context_length * 100) if ctx.context_length else 0
@@ -5304,7 +5353,7 @@ class GatewayRunner:
 
             return "\n".join(lines)
 
-        # No running agent -- check session history for a rough count
+        # No agent at all -- check session history for a rough count
         session_entry = self.session_store.get_or_create_session(source)
         history = self.session_store.load_transcript(session_entry.session_id)
         if history:
@@ -5315,7 +5364,7 @@ class GatewayRunner:
                 f"📊 **Session Info**\n"
                 f"Messages: {len(msgs)}\n"
                 f"Estimated context: ~{approx:,} tokens\n"
-                f"_(Detailed usage available during active conversations)_"
+                f"_(Detailed usage available after the first agent response)_"
             )
         return "No usage data available for this session."
 
@@ -6283,6 +6332,32 @@ class GatewayRunner:
         )
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
+    def _apply_session_model_override(
+        self, session_key: str, model: str, runtime_kwargs: dict
+    ) -> tuple:
+        """Apply /model session overrides if present, returning (model, runtime_kwargs).
+
+        The gateway /model command stores per-session overrides in
+        ``_session_model_overrides``.  These must take precedence over
+        config.yaml defaults so the switched model is actually used for
+        subsequent messages.  Fields with ``None`` values are skipped so
+        partial overrides don't clobber valid config defaults.
+        """
+        override = self._session_model_overrides.get(session_key)
+        if not override:
+            return model, runtime_kwargs
+        model = override.get("model", model)
+        for key in ("provider", "api_key", "base_url", "api_mode"):
+            val = override.get(key)
+            if val is not None:
+                runtime_kwargs[key] = val
+        return model, runtime_kwargs
+
+    def _is_intentional_model_switch(self, session_key: str, agent_model: str) -> bool:
+        """Return True if *agent_model* matches an active /model session override."""
+        override = self._session_model_overrides.get(session_key)
+        return override is not None and override.get("model") == agent_model
+
     def _evict_cached_agent(self, session_key: str) -> None:
         """Remove a cached agent for a session (called on /new, /model, etc)."""
         _lock = getattr(self, "_agent_cache_lock", None)
@@ -6659,6 +6734,11 @@ class GatewayRunner:
                     "api_calls": 0,
                     "tools": [],
                 }
+
+            # /model overrides take precedence over config.yaml defaults.
+            model, runtime_kwargs = self._apply_session_model_override(
+                session_key, model, runtime_kwargs
+            )
 
             pr = self._provider_routing
             reasoning_config = self._load_reasoning_config()
@@ -7279,14 +7359,15 @@ class GatewayRunner:
             _agent = agent_holder[0]
             if _agent is not None and hasattr(_agent, 'model'):
                 _cfg_model = _resolve_gateway_model()
-                if _agent.model != _cfg_model:
+                if _agent.model != _cfg_model and not self._is_intentional_model_switch(session_key, _agent.model):
                     self._effective_model = _agent.model
                     self._effective_provider = getattr(_agent, 'provider', None)
                     # Fallback activated — evict cached agent so the next
                     # message starts fresh and retries the primary model.
                     self._evict_cached_agent(session_key)
                 else:
-                    # Primary model worked — clear any stale fallback state
+                    # Primary model worked (or intentional /model switch)
+                    # — clear any stale fallback state.
                     self._effective_model = None
                     self._effective_provider = None
 

@@ -794,7 +794,7 @@ class AIAgent:
                     client_kwargs["default_headers"] = copilot_default_headers()
                 elif "api.kimi.com" in effective_base.lower():
                     client_kwargs["default_headers"] = {
-                        "User-Agent": "KimiCLI/1.3",
+                        "User-Agent": "KimiCLI/1.30.0",
                     }
                 elif "portal.qwen.ai" in effective_base.lower():
                     client_kwargs["default_headers"] = _qwen_portal_headers()
@@ -4181,7 +4181,7 @@ class AIAgent:
 
             self._client_kwargs["default_headers"] = copilot_default_headers()
         elif "api.kimi.com" in normalized:
-            self._client_kwargs["default_headers"] = {"User-Agent": "KimiCLI/1.3"}
+            self._client_kwargs["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
         elif "portal.qwen.ai" in normalized:
             self._client_kwargs["default_headers"] = _qwen_portal_headers()
         else:
@@ -4433,7 +4433,17 @@ class AIAgent:
             """Stream a chat completions response."""
             import httpx as _httpx
             _base_timeout = float(os.getenv("HERMES_API_TIMEOUT", 1800.0))
-            _stream_read_timeout = float(os.getenv("HERMES_STREAM_READ_TIMEOUT", 60.0))
+            _stream_read_timeout = float(os.getenv("HERMES_STREAM_READ_TIMEOUT", 120.0))
+            # Local providers (Ollama, llama.cpp, vLLM) can take minutes for
+            # prefill on large contexts before producing the first token.
+            # Auto-increase the httpx read timeout unless the user explicitly
+            # overrode HERMES_STREAM_READ_TIMEOUT.
+            if _stream_read_timeout == 120.0 and self.base_url and is_local_endpoint(self.base_url):
+                _stream_read_timeout = _base_timeout
+                logger.debug(
+                    "Local provider detected (%s) — stream read timeout raised to %.0fs",
+                    self.base_url, _stream_read_timeout,
+                )
             stream_kwargs = {
                 **api_kwargs,
                 "stream": True,
@@ -5456,6 +5466,7 @@ class AIAgent:
                 preserve_dots=self._anthropic_preserve_dots(),
                 context_length=ctx_len,
                 base_url=getattr(self, "_anthropic_base_url", None),
+                fast_mode=self.request_overrides.get("speed") == "fast",
             )
 
         if self.api_mode == "codex_responses":
@@ -8334,6 +8345,10 @@ class AIAgent:
                                 approx_tokens=approx_tokens,
                                 task_id=effective_task_id,
                             )
+                            # Compression created a new session — clear history
+                            # so _flush_messages_to_session_db writes compressed
+                            # messages to the new session, not skipping them.
+                            conversation_history = None
                             if len(messages) < original_len or old_ctx > _reduced_ctx:
                                 self._emit_status(
                                     f"🗜️ Context reduced to {_reduced_ctx:,} tokens "
@@ -8391,6 +8406,10 @@ class AIAgent:
                             messages, system_message, approx_tokens=approx_tokens,
                             task_id=effective_task_id,
                         )
+                        # Compression created a new session — clear history
+                        # so _flush_messages_to_session_db writes compressed
+                        # messages to the new session, not skipping them.
+                        conversation_history = None
 
                         if len(messages) < original_len:
                             self._emit_status(f"🗜️ Compressed {original_len} → {len(messages)} messages, retrying...")
@@ -8509,6 +8528,10 @@ class AIAgent:
                             messages, system_message, approx_tokens=approx_tokens,
                             task_id=effective_task_id,
                         )
+                        # Compression created a new session — clear history
+                        # so _flush_messages_to_session_db writes compressed
+                        # messages to the new session, not skipping them.
+                        conversation_history = None
 
                         if len(messages) < original_len or new_ctx and new_ctx < old_ctx:
                             if len(messages) < original_len:
