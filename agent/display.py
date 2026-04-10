@@ -794,10 +794,6 @@ def get_cute_tool_message(
             extra = f" +{len(urls)-1}" if len(urls) > 1 else ""
             return _wrap(f"┊ 📄 fetch     {_trunc(domain, 35)}{extra}  {dur}")
         return _wrap(f"┊ 📄 fetch     pages  {dur}")
-    if tool_name == "web_crawl":
-        url = args.get("url", "")
-        domain = url.replace("https://", "").replace("http://", "").split("/")[0]
-        return _wrap(f"┊ 🕸️  crawl     {_trunc(domain, 35)}  {dur}")
     if tool_name == "terminal":
         return _wrap(f"┊ 💻 $         {_trunc(args.get('command', ''), 42)}  {dur}")
     if tool_name == "process":
@@ -902,6 +898,27 @@ def get_cute_tool_message(
         if tasks and isinstance(tasks, list):
             return _wrap(f"┊ 🔀 delegate  {len(tasks)} parallel tasks  {dur}")
         return _wrap(f"┊ 🔀 delegate  {_trunc(args.get('goal', ''), 35)}  {dur}")
+    if tool_name == "browser_console":
+        expr = args.get("expression", "")
+        return _wrap(f"┊ 💻 console   {_trunc(expr, 35)}  {dur}")
+    if tool_name == "clarify":
+        return _wrap(f"┊ ❓ clarify   {_trunc(args.get('question', ''), 35)}  {dur}")
+    if tool_name == "skill_manage":
+        action = args.get("action", "?")
+        name = args.get("name", "")
+        return _wrap(f"┊ 🛠️  skill     {action} {_trunc(name, 25)}  {dur}")
+    if tool_name == "ha_list_entities":
+        domain = args.get("domain", "all")
+        return _wrap(f"┊ 🏠 ha        list entities ({domain})  {dur}")
+    if tool_name == "ha_get_state":
+        entity = args.get("entity_id", "?")
+        return _wrap(f"┊ 🏠 ha        state {_trunc(entity, 30)}  {dur}")
+    if tool_name == "ha_list_services":
+        domain = args.get("domain", "all")
+        return _wrap(f"┊ 🏠 ha        list services ({domain})  {dur}")
+    if tool_name == "ha_call_service":
+        service = args.get("service", "?")
+        return _wrap(f"┊ 🏠 ha        call {_trunc(service, 30)}  {dur}")
 
     preview = build_tool_preview(tool_name, args) or ""
     return _wrap(f"┊ ⚡ {tool_name[:9]:9} {_trunc(preview, 35)}  {dur}")

@@ -1,4 +1,4 @@
-"""Tests for agent/display.py — build_tool_preview() and inline diff previews."""
+"""Tests for agent/display.py — build_tool_preview(), get_cute_tool_message(), and inline diff previews."""
 
 import os
 import pytest
@@ -8,6 +8,7 @@ from agent.display import (
     build_tool_preview,
     capture_local_edit_snapshot,
     extract_edit_diff,
+    get_cute_tool_message,
     _render_inline_unified_diff,
     _summarize_rendered_diff_sections,
     render_edit_diff_with_delta,
@@ -200,3 +201,68 @@ class TestEditDiffPreview:
         assert any("a/file2.py" in line for line in rendered)
         assert not any("a/file7.py" in line for line in rendered)
         assert "additional file" in rendered[-1]
+
+
+class TestGetCuteToolMessageNewEntries:
+    """Tests for newly added get_cute_tool_message display entries."""
+
+    def test_browser_console(self):
+        msg = get_cute_tool_message("browser_console", {"expression": "document.title"}, 1.0)
+        assert "document.title" in msg
+        assert "console" in msg
+        assert "1.0s" in msg
+
+    def test_clarify(self):
+        msg = get_cute_tool_message("clarify", {"question": "Which file?"}, 0.5)
+        assert "Which file?" in msg
+        assert "clarify" in msg
+        assert "0.5s" in msg
+
+    def test_skill_manage_create(self):
+        msg = get_cute_tool_message("skill_manage", {"action": "create", "name": "my-skill"}, 1.2)
+        assert "create" in msg
+        assert "my-skill" in msg
+        assert "skill" in msg
+
+    def test_skill_manage_delete(self):
+        msg = get_cute_tool_message("skill_manage", {"action": "delete", "name": "old-skill"}, 0.3)
+        assert "delete" in msg
+        assert "old-skill" in msg
+
+    def test_ha_list_entities_with_domain(self):
+        msg = get_cute_tool_message("ha_list_entities", {"domain": "light"}, 2.0)
+        assert "light" in msg
+        assert "entities" in msg
+        assert "2.0s" in msg
+
+    def test_ha_list_entities_default_domain(self):
+        msg = get_cute_tool_message("ha_list_entities", {}, 1.0)
+        assert "all" in msg
+        assert "entities" in msg
+
+    def test_ha_get_state(self):
+        msg = get_cute_tool_message("ha_get_state", {"entity_id": "light.living_room"}, 1.5)
+        assert "light.living_room" in msg
+        assert "state" in msg
+
+    def test_ha_list_services(self):
+        msg = get_cute_tool_message("ha_list_services", {"domain": "switch"}, 0.8)
+        assert "switch" in msg
+        assert "services" in msg
+
+    def test_ha_call_service(self):
+        msg = get_cute_tool_message("ha_call_service", {"service": "light.toggle"}, 1.0)
+        assert "light.toggle" in msg
+        assert "call" in msg
+
+    def test_web_crawl_uses_fallback(self):
+        """web_crawl display entry was removed; should fall through to generic ⚡ handler."""
+        msg = get_cute_tool_message("web_crawl", {"url": "https://example.com"}, 1.0)
+        assert "⚡" in msg
+        assert "web_crawl" in msg
+
+    def test_existing_tool_not_broken(self):
+        """Sanity check: existing tools like terminal still render correctly."""
+        msg = get_cute_tool_message("terminal", {"command": "ls -la"}, 1.0)
+        assert "ls -la" in msg
+        assert "$" in msg
