@@ -103,6 +103,17 @@ def _make_runner(adapter):
     runner._fallback_model = None
     runner._session_db = None
     runner._running_agents = {}
+    runner._session_model_overrides = {}
+    runner._running_agents_ts = {}
+    runner._pending_approvals = {}
+    runner._update_prompt_pending = {}
+    runner._failed_platforms = {}
+    runner._background_tasks = set()
+    runner._agent_cache = {}
+    runner._agent_cache_lock = __import__("threading").Lock()
+    runner._running = False
+    runner._shutdown_event = __import__("asyncio").Event()
+    runner._pending_messages = {}
     runner.hooks = SimpleNamespace(loaded_hooks=False)
     return runner
 
