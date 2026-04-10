@@ -3,6 +3,7 @@ Cron job storage and management.
 
 Jobs are stored in ~/.hermes/cron/jobs.json
 Output is saved to ~/.hermes/cron/output/{job_id}/{timestamp}.md
+Running markers are stored in ~/.hermes/cron/running/{job_id}.json
 """
 
 import copy
@@ -35,6 +36,7 @@ HERMES_DIR = get_hermes_home()
 CRON_DIR = HERMES_DIR / "cron"
 JOBS_FILE = CRON_DIR / "jobs.json"
 OUTPUT_DIR = CRON_DIR / "output"
+RUNNING_DIR = CRON_DIR / "running"
 ONESHOT_GRACE_SECONDS = 120
 
 
@@ -81,12 +83,118 @@ def _secure_file(path: Path):
         pass
 
 
-def ensure_dirs():
+def _cron_dir(base_dir: Optional[Path] = None) -> Path:
+    """Resolve the cron root directory, optionally relative to a base home."""
+    if base_dir is None:
+        return CRON_DIR
+    return Path(base_dir).expanduser() / "cron"
+
+
+def _running_dir(base_dir: Optional[Path] = None) -> Path:
+    return _cron_dir(base_dir) / "running"
+
+
+def ensure_dirs(base_dir: Optional[Path] = None):
     """Ensure cron directories exist with secure permissions."""
-    CRON_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    _secure_dir(CRON_DIR)
-    _secure_dir(OUTPUT_DIR)
+    cron_dir = _cron_dir(base_dir)
+    output_dir = cron_dir / "output"
+    running_dir = cron_dir / "running"
+    cron_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    running_dir.mkdir(parents=True, exist_ok=True)
+    _secure_dir(cron_dir)
+    _secure_dir(output_dir)
+    _secure_dir(running_dir)
+
+
+def _pid_is_alive(pid: Optional[Any]) -> bool:
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid_int <= 0:
+        return False
+    try:
+        os.kill(pid_int, 0)
+        return True
+    except (OSError, ValueError, NotImplementedError):
+        return False
+
+
+def mark_job_running(job_id: str, *, base_dir: Optional[Path] = None, **metadata) -> Path:
+    """Persist a marker for a job that is currently running."""
+    ensure_dirs(base_dir)
+    running_dir = _running_dir(base_dir)
+    marker = {
+        "job_id": job_id,
+        "pid": os.getpid(),
+        "started_at": _hermes_now().isoformat(),
+    }
+    marker.update(metadata)
+
+    marker_file = running_dir / f"{job_id}.json"
+    fd, tmp_path = tempfile.mkstemp(dir=str(running_dir), suffix='.tmp', prefix=f'.running_{job_id}_')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(marker, f, indent=2, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, marker_file)
+        _secure_file(marker_file)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return marker_file
+
+
+def clear_running_job(job_id: str, *, base_dir: Optional[Path] = None):
+    """Remove a running-job marker if one exists."""
+    marker_file = _running_dir(base_dir) / f"{job_id}.json"
+    try:
+        marker_file.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
+def list_running_jobs(*, base_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Return all currently active job markers."""
+    ensure_dirs(base_dir)
+    running_dir = _running_dir(base_dir)
+    active: List[Dict[str, Any]] = []
+
+    for marker_file in sorted(running_dir.glob("*.json")):
+        try:
+            with open(marker_file, encoding="utf-8") as f:
+                marker = json.load(f)
+        except Exception as e:
+            logger.debug("Skipping unreadable running marker %s: %s", marker_file, e)
+            continue
+
+        if not _pid_is_alive(marker.get("pid")):
+            continue
+
+        started_at = marker.get("started_at")
+        age_seconds = None
+        if isinstance(started_at, str) and started_at.strip():
+            try:
+                started_dt = _ensure_aware(datetime.fromisoformat(started_at))
+                now = _ensure_aware(_hermes_now())
+                age_seconds = max(0.0, (now - started_dt).total_seconds())
+            except Exception:
+                age_seconds = None
+
+        marker["job_id"] = marker.get("job_id") or marker_file.stem
+        marker["marker_path"] = str(marker_file)
+        marker["age_seconds"] = age_seconds
+        active.append(marker)
+
+    active.sort(key=lambda item: item.get("started_at") or "")
+    return active
 
 
 # =============================================================================

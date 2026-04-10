@@ -37,6 +37,7 @@ def cron_env(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs_mod, "CRON_DIR", hermes_home / "cron")
     monkeypatch.setattr(jobs_mod, "JOBS_FILE", hermes_home / "cron" / "jobs.json")
     monkeypatch.setattr(jobs_mod, "OUTPUT_DIR", hermes_home / "cron" / "output")
+    monkeypatch.setattr(jobs_mod, "RUNNING_DIR", hermes_home / "cron" / "running")
 
     return hermes_home
 

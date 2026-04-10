@@ -32,6 +32,16 @@ def _normalize_skills(single_skill=None, skills: Optional[Iterable[str]] = None)
     return normalized
 
 
+def _format_elapsed(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return ""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.1f}m"
+    return f"{seconds / 3600:.1f}h"
+
+
 def _cron_api(**kwargs):
     from tools.cronjob_tools import cronjob as cronjob_tool
 
@@ -43,6 +53,9 @@ def cron_list(show_all: bool = False):
     from cron.jobs import list_jobs
 
     jobs = list_jobs(include_disabled=show_all)
+    from cron.jobs import list_running_jobs
+
+    running_jobs = {job.get("job_id") for job in list_running_jobs()}
 
     if not jobs:
         print(color("No scheduled jobs.", Colors.DIM))
@@ -73,7 +86,9 @@ def cron_list(show_all: bool = False):
         deliver_str = ", ".join(deliver)
 
         skills = job.get("skills") or ([job["skill"]] if job.get("skill") else [])
-        if state == "paused":
+        if job_id in running_jobs:
+            status = color("[running]", Colors.MAGENTA)
+        elif state == "paused":
             status = color("[paused]", Colors.YELLOW)
         elif state == "completed":
             status = color("[completed]", Colors.BLUE)
@@ -144,6 +159,30 @@ def cron_status():
         print("    hermes gateway            # Or run in foreground")
 
     print()
+
+    from cron.jobs import list_running_jobs
+    running_jobs = list_running_jobs()
+    if running_jobs:
+        print(color(f"  Running now: {len(running_jobs)} job(s)", Colors.GREEN))
+        for running in running_jobs:
+            job_id = running.get("job_id", "?")
+            name = running.get("name", "(unnamed)")
+            elapsed = _format_elapsed(running.get("age_seconds"))
+            elapsed_suffix = f" ({elapsed} ago)" if elapsed else ""
+            print(f"    {color(job_id, Colors.YELLOW)} {name}{elapsed_suffix}")
+            started_at = running.get("started_at")
+            if started_at:
+                print(f"      Started: {started_at}")
+            session_id = running.get("session_id")
+            if session_id:
+                print(f"      Session: {session_id}")
+            prompt_preview = running.get("prompt_preview")
+            if prompt_preview:
+                print(f"      Prompt:  {prompt_preview}")
+        print()
+    else:
+        print("  Running now: none")
+        print()
 
     jobs = list_jobs(include_disabled=False)
     if jobs:

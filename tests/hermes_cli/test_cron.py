@@ -4,7 +4,7 @@ from argparse import Namespace
 
 import pytest
 
-from cron.jobs import create_job, get_job, list_jobs
+from cron.jobs import create_job, get_job, list_jobs, mark_job_running
 from hermes_cli.cron import cron_command
 
 
@@ -13,6 +13,7 @@ def tmp_cron_dir(tmp_path, monkeypatch):
     monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
     monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
     monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
+    monkeypatch.setattr("cron.jobs.RUNNING_DIR", tmp_path / "cron" / "running")
     return tmp_path
 
 
@@ -105,3 +106,20 @@ class TestCronCommandLifecycle:
         assert len(jobs) == 1
         assert jobs[0]["skills"] == ["blogwatcher", "find-nearby"]
         assert jobs[0]["name"] == "Skill combo"
+
+    def test_status_shows_running_job(self, tmp_cron_dir, capsys, monkeypatch):
+        job = create_job(prompt="Check me", schedule="every 1h", name="Active Job")
+        mark_job_running(
+            job["id"],
+            name=job["name"],
+            session_id="cron_test_123",
+            prompt_preview="Check me",
+        )
+        monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda exclude_pids=None: [12345])
+
+        cron_command(Namespace(cron_command="status"))
+
+        out = capsys.readouterr().out
+        assert "Running now: 1 job(s)" in out
+        assert "Active Job" in out
+        assert "cron_test_123" in out

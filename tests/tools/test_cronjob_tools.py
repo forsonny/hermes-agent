@@ -111,6 +111,7 @@ class TestScheduleCronjob:
         monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
         monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
         monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
+        monkeypatch.setattr("cron.jobs.RUNNING_DIR", tmp_path / "cron" / "running")
 
     def test_schedule_success(self):
         result = json.loads(schedule_cronjob(
@@ -216,6 +217,7 @@ class TestListCronjobs:
         monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
         monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
         monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
+        monkeypatch.setattr("cron.jobs.RUNNING_DIR", tmp_path / "cron" / "running")
 
     def test_empty_list(self):
         result = json.loads(list_cronjobs())
@@ -253,6 +255,7 @@ class TestRemoveCronjob:
         monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
         monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
         monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
+        monkeypatch.setattr("cron.jobs.RUNNING_DIR", tmp_path / "cron" / "running")
 
     def test_remove_existing(self):
         created = json.loads(schedule_cronjob(prompt="Temp", schedule="30m"))
@@ -276,6 +279,7 @@ class TestUnifiedCronjobTool:
         monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
         monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
         monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
+        monkeypatch.setattr("cron.jobs.RUNNING_DIR", tmp_path / "cron" / "running")
 
     def test_create_and_list(self):
         created = json.loads(

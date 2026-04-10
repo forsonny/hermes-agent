@@ -47,7 +47,14 @@ _KNOWN_DELIVERY_PLATFORMS = frozenset({
     "wecom", "sms", "email", "webhook", "bluebubbles",
 })
 
-from cron.jobs import get_due_jobs, mark_job_run, save_job_output, advance_next_run
+from cron.jobs import (
+    get_due_jobs,
+    mark_job_run,
+    save_job_output,
+    advance_next_run,
+    mark_job_running,
+    clear_running_job,
+)
 
 # Sentinel: when a cron agent has nothing new to report, it can start its
 # response with this marker to suppress delivery.  Output is still saved
@@ -583,6 +590,19 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
     logger.info("Prompt: %s", prompt[:100])
 
     try:
+        mark_job_running(
+            job_id,
+            base_dir=_hermes_home,
+            name=job_name,
+            session_id=_cron_session_id,
+            schedule=job.get("schedule_display", "N/A"),
+            prompt_preview=prompt[:120],
+            deliver=job.get("deliver"),
+        )
+    except Exception as e:
+        logger.debug("Job '%s': failed to write running marker: %s", job_id, e)
+
+    try:
         # Inject origin context so the agent's send_message tool knows the chat.
         # Must be INSIDE the try block so the finally cleanup always runs.
         if origin:
@@ -846,6 +866,7 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         return False, output, "", error_msg
 
     finally:
+        clear_running_job(job_id, base_dir=_hermes_home)
         # Clean up injected env vars so they don't leak to other jobs
         for key in (
             "HERMES_SESSION_PLATFORM",

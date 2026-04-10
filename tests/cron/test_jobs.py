@@ -23,6 +23,9 @@ from cron.jobs import (
     advance_next_run,
     get_due_jobs,
     save_job_output,
+    mark_job_running,
+    clear_running_job,
+    list_running_jobs,
 )
 
 
@@ -185,6 +188,7 @@ def tmp_cron_dir(tmp_path, monkeypatch):
     monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
     monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
     monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
+    monkeypatch.setattr("cron.jobs.RUNNING_DIR", tmp_path / "cron" / "running")
     return tmp_path
 
 
@@ -368,6 +372,30 @@ class TestMarkJobRun:
         assert updated["last_status"] == "error"
         assert updated["last_error"] == "model timeout"
         assert updated["last_delivery_error"] == "platform 'discord' not enabled"
+
+
+class TestRunningJobMarkers:
+    def test_marker_lifecycle(self, tmp_cron_dir):
+        job = create_job(prompt="Test", schedule="every 1h")
+
+        mark_job_running(
+            job["id"],
+            name=job["name"],
+            session_id="cron_test_123",
+            prompt_preview="Test prompt preview",
+        )
+
+        running = list_running_jobs()
+        assert len(running) == 1
+        marker = running[0]
+        assert marker["job_id"] == job["id"]
+        assert marker["name"] == job["name"]
+        assert marker["session_id"] == "cron_test_123"
+        assert marker["prompt_preview"] == "Test prompt preview"
+        assert marker["age_seconds"] is not None
+
+        clear_running_job(job["id"])
+        assert list_running_jobs() == []
 
 
 class TestAdvanceNextRun:
