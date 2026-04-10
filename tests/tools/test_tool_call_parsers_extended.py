@@ -115,7 +115,7 @@ class TestQwenParser:
         assert tool_calls is None
 
     def test_single_tool_call_hermes_format(self, parser):
-        text = '{"name": "terminal", "arguments": {"command": "echo hi"}}\n'
+        text = '<tool_call>{"name": "terminal", "arguments": {"command": "echo hi"}}</tool_call>\n'
         content, tool_calls = parser.parse(text)
         assert tool_calls is not None
         assert len(tool_calls) == 1
@@ -123,8 +123,8 @@ class TestQwenParser:
 
     def test_multiple_tool_calls(self, parser):
         text = (
-            '{"name": "terminal", "arguments": {"command": "ls"}}\n'
-            '{"name": "read_file", "arguments": {"path": "test.py"}}\n'
+            '<tool_call>{"name": "terminal", "arguments": {"command": "ls"}}</tool_call>\n'
+            '<tool_call>{"name": "read_file", "arguments": {"path": "test.py"}}</tool_call>\n'
         )
         content, tool_calls = parser.parse(text)
         assert tool_calls is not None

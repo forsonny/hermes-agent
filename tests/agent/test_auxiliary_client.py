@@ -20,6 +20,7 @@ from agent.auxiliary_client import (
     _is_payment_error,
     _try_payment_fallback,
     _resolve_auto,
+    _resolve_forced_provider,
 )
 
 

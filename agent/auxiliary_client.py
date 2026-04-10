@@ -1094,6 +1094,48 @@ def _try_payment_fallback(
     return None, None, ""
 
 
+def _resolve_forced_provider(
+    provider: str,
+) -> Tuple[Optional[Any], Optional[str]]:
+    """Resolve a specific named provider for auxiliary tasks.
+
+    Unlike ``_resolve_auto()`` which tries providers in priority order, this
+    function *only* attempts the explicitly requested provider.  Returns
+    ``(client, model)`` on success, ``(None, None)`` if the provider is not
+    configured or the credentials are missing.
+
+    Supported names (before normalisation):
+      "openrouter", "nous", "main" (custom runtime → codex fallback),
+      "codex", or any provider known to ``_normalize_aux_provider()``.
+    """
+    normalized = _normalize_aux_provider(provider)
+
+    # ── OpenRouter ─────────────────────────────────────────────────────
+    if normalized == "openrouter":
+        return _try_openrouter()
+
+    # ── Nous Portal ────────────────────────────────────────────────────
+    if normalized == "nous":
+        return _try_nous()
+
+    # ── Codex / OpenAI Codex ───────────────────────────────────────────
+    if normalized == "openai-codex":
+        return _try_codex()
+
+    # ── Main provider (custom runtime with Codex fallback) ─────────────
+    if normalized == "custom":
+        client, model = _try_custom_endpoint()
+        if client is not None:
+            return client, model
+        # Fall back to Codex if no custom endpoint is configured
+        return _try_codex()
+
+    # ── Unknown provider ───────────────────────────────────────────────
+    logger.debug("_resolve_forced_provider: unknown provider %r (normalized: %r)",
+                 provider, normalized)
+    return None, None
+
+
 def _resolve_auto() -> Tuple[Optional[OpenAI], Optional[str]]:
     """Full auto-detection chain.
 
