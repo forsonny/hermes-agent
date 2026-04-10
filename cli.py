@@ -1373,6 +1373,17 @@ from agent.skill_commands import (
 
 _skill_commands = scan_skill_commands()
 
+# Load file-based custom commands from ~/.hermes/commands/
+from hermes_cli.custom_commands import (
+    load_custom_commands as _load_custom_commands,
+    get_custom_command as _get_custom_command,
+    expand_prompt as _expand_custom_prompt,
+    register_custom_commands as _register_custom_commands,
+)
+_custom_cmds = _load_custom_commands()
+if _custom_cmds:
+    _register_custom_commands()
+
 
 def _get_plugin_cmd_handler_names() -> set:
     """Return plugin command names (without slash prefix) for dispatch matching."""
@@ -3508,6 +3519,16 @@ class HermesCLI:
                     f"    [bold {_accent_hex()}]{cmd:<22}[/] [dim]-[/] {_escape(info['description'])}"
                 )
 
+        if _custom_cmds:
+            _cprint(f"\n  📂 {_BOLD}Custom Commands{_RST} ({len(_custom_cmds)} loaded from {display_hermes_home()}/commands/):")
+            for name, info in sorted(_custom_cmds.items()):
+                desc = _escape(info.get("description", f"Custom: /{name}"))
+                aliases = info.get("aliases", [])
+                alias_str = f" (aliases: {', '.join(f'/{a}' for a in aliases)})" if aliases else ""
+                ChatConsole().print(
+                    f"    [bold {_accent_hex()}]/{name:<21}[/] [dim]-[/] {desc}{alias_str}"
+                )
+
         _cprint(f"\n  {_DIM}Tip: Just type your message to chat with Hermes!{_RST}")
         _cprint(f"  {_DIM}Multi-line: Alt+Enter for a new line{_RST}")
         if _is_termux_environment():
@@ -5068,6 +5089,18 @@ class HermesCLI:
                             _cprint(str(result))
                     except Exception as e:
                         _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
+            # Check for file-based custom commands (~/.hermes/commands/*.yaml|*.md)
+            elif _get_custom_command(base_cmd.lstrip("/")):
+                _cmd = _get_custom_command(base_cmd.lstrip("/"))
+                user_args = cmd_original[len(base_cmd):].strip()
+                prompt = _expand_custom_prompt(_cmd, user_args)
+                if prompt:
+                    _cmd_name = _cmd.get("_canonical_name", base_cmd.lstrip("/"))
+                    print(f"\n⚡ Custom command: /{_cmd_name}")
+                    if hasattr(self, '_pending_input'):
+                        self._pending_input.put(prompt)
+                else:
+                    ChatConsole().print(f"[bold red]Custom command {base_cmd} has empty prompt[/]")
             # Check for skill slash commands (/gif-search, /axolotl, etc.)
             elif base_cmd in _skill_commands:
                 user_instruction = cmd_original[len(base_cmd):].strip()
@@ -5087,7 +5120,8 @@ class HermesCLI:
                 # that execution-time resolution agrees with tab-completion.
                 from hermes_cli.commands import COMMANDS
                 typed_base = cmd_lower.split()[0]
-                all_known = set(COMMANDS) | set(_skill_commands)
+                _custom_cmd_slash = {f"/{n}" for n in _custom_cmds}
+                all_known = set(COMMANDS) | set(_skill_commands) | _custom_cmd_slash
                 matches = [c for c in all_known if c.startswith(typed_base)]
                 if len(matches) > 1:
                     # Prefer an exact match (typed the full command name)

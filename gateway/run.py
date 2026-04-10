@@ -2320,14 +2320,25 @@ class GatewayRunner:
                     _unavail_msg = _check_unavailable_skill(command)
                     if _unavail_msg:
                         return _unavail_msg
+                    # Check for file-based custom commands (~/.hermes/commands/)
+                    try:
+                        from hermes_cli.custom_commands import (
+                            get_custom_command as _gw_get_custom,
+                            expand_prompt as _gw_expand,
+                        )
+                        _gw_cmd = _gw_get_custom(command)
+                        if _gw_cmd:
+                            user_args = event.get_command_args().strip()
+                            prompt = _gw_expand(_gw_cmd, user_args)
+                            if prompt:
+                                event.text = prompt
+                                # Fall through to normal message processing
+                            else:
+                                return f"Custom command `/{command}` has an empty prompt."
+                    except Exception:
+                        pass
                     # Genuinely unrecognized /command: not a built-in, not a
-                    # plugin, not a skill, not a known-inactive skill. Warn
-                    # the user instead of silently forwarding it to the LLM
-                    # as free text (which leads to silent-failure behavior
-                    # like the model inventing a delegate_task call).
-                    # Normalize to hyphenated form before checking known
-                    # built-ins (command may be an alias target set by the
-                    # quick-command block above, so _cmd_def can be stale).
+                    # plugin, not a skill, not a custom command. Warn the user.
                     if command.replace("_", "-") not in GATEWAY_KNOWN_COMMANDS:
                         logger.warning(
                             "Unrecognized slash command /%s from %s — "
