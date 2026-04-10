@@ -146,6 +146,25 @@ def test_extract_tool_calls_from_bare_json_block():
     assert tool_calls[0].function.arguments == '{"query": "hello"}'
 
 
+def test_extract_tool_calls_from_bare_json_block_removes_duplicate_nested_objects():
+    tool_call = (
+        '{"type":"function","function":{"name":"search",'
+        '"arguments":{"query":"hello","nested":{"a":1}}}}'
+    )
+    text = f"Lead {tool_call} middle {tool_call} tail"
+
+    tool_calls, cleaned = copilot._extract_tool_calls_from_text(text)
+
+    assert cleaned == "Lead\nmiddle\ntail"
+    assert len(tool_calls) == 2
+    assert [call.id for call in tool_calls] == ["acp_call_1", "acp_call_2"]
+    assert [call.function.name for call in tool_calls] == ["search", "search"]
+    assert [call.function.arguments for call in tool_calls] == [
+        '{"query": "hello", "nested": {"a": 1}}',
+        '{"query": "hello", "nested": {"a": 1}}',
+    ]
+
+
 def test_ensure_path_within_cwd_rejects_escaping_paths(tmp_path):
     cwd = tmp_path / "workspace"
     cwd.mkdir()

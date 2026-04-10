@@ -152,9 +152,9 @@ def _render_message_content(content: Any) -> str:
     return str(content).strip()
 
 
-def _iter_balanced_json_objects(text: str) -> list[str]:
-    """Extract top-level balanced JSON object spans from text."""
-    objects: list[str] = []
+def _iter_balanced_json_spans(text: str) -> list[tuple[int, int]]:
+    """Return top-level balanced JSON object spans from text."""
+    spans: list[tuple[int, int]] = []
     start: int | None = None
     depth = 0
     in_string = False
@@ -185,11 +185,10 @@ def _iter_balanced_json_objects(text: str) -> list[str]:
         elif ch == "}":
             depth -= 1
             if depth == 0:
-                objects.append(text[start : index + 1])
+                spans.append((start, index + 1))
                 start = None
 
-    return objects
-
+    return spans
 
 def _extract_tool_calls_from_text(text: str) -> tuple[list[SimpleNamespace], str]:
     if not isinstance(text, str) or not text.strip():
@@ -235,13 +234,9 @@ def _extract_tool_calls_from_text(text: str) -> tuple[list[SimpleNamespace], str
 
     # Only try bare-JSON fallback when no XML blocks were found.
     if not extracted:
-        for raw_json in _iter_balanced_json_objects(text):
-            _try_add_tool_call(raw_json)
-            # Best-effort span removal: use the first matching slice so the
-            # cleaned text drops the JSON object even when nested braces exist.
-            start = text.find(raw_json)
-            if start >= 0:
-                consumed_spans.append((start, start + len(raw_json)))
+        for start, end in _iter_balanced_json_spans(text):
+            _try_add_tool_call(text[start:end])
+            consumed_spans.append((start, end))
 
     if not consumed_spans:
         return extracted, text.strip()
