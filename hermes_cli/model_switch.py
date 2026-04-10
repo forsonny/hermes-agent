@@ -809,8 +809,9 @@ def list_authenticated_providers(
         })
         seen_slugs.add(slug)
 
-    # --- 2. Check Hermes-only providers (nous, openai-codex, copilot) ---
+    # --- 2. Check Hermes-only providers (nous, openai-codex, copilot, opencode-go) ---
     from hermes_cli.providers import HERMES_OVERLAYS
+    from hermes_cli.auth import PROVIDER_REGISTRY as _auth_registry
     for pid, overlay in HERMES_OVERLAYS.items():
         if pid in seen_slugs:
             continue
@@ -818,6 +819,11 @@ def list_authenticated_providers(
         has_creds = False
         if overlay.extra_env_vars:
             has_creds = any(os.environ.get(ev) for ev in overlay.extra_env_vars)
+        # Also check api_key_env_vars from PROVIDER_REGISTRY for api_key auth_type
+        if not has_creds and overlay.auth_type == "api_key":
+            pcfg = _auth_registry.get(pid)
+            if pcfg and pcfg.api_key_env_vars:
+                has_creds = any(os.environ.get(ev) for ev in pcfg.api_key_env_vars)
         if overlay.auth_type in ("oauth_device_code", "oauth_external", "external_process"):
             # These use auth stores, not env vars — check for auth.json entries
             try:
@@ -915,74 +921,3 @@ def list_authenticated_providers(
     return results
 
 
-# ---------------------------------------------------------------------------
-# Fuzzy suggestions
-# ---------------------------------------------------------------------------
-
-def suggest_models(raw_input: str, limit: int = 3) -> List[str]:
-    """Return fuzzy model suggestions for a (possibly misspelled) input."""
-    query = raw_input.strip()
-    if not query:
-        return []
-
-    results = search_models_dev(query, limit=limit)
-    suggestions: list[str] = []
-    for r in results:
-        mid = r.get("model_id", "")
-        if mid:
-            suggestions.append(mid)
-
-    return suggestions[:limit]
-
-
-# ---------------------------------------------------------------------------
-# Custom provider switch
-# ---------------------------------------------------------------------------
-
-def switch_to_custom_provider() -> CustomAutoResult:
-    """Handle bare '/model --provider custom' — resolve endpoint and auto-detect model."""
-    from hermes_cli.runtime_provider import (
-        resolve_runtime_provider,
-        _auto_detect_local_model,
-    )
-
-    try:
-        runtime = resolve_runtime_provider(requested="custom")
-    except Exception as e:
-        return CustomAutoResult(
-            success=False,
-            error_message=f"Could not resolve custom endpoint: {e}",
-        )
-
-    cust_base = runtime.get("base_url", "")
-    cust_key = runtime.get("api_key", "")
-
-    if not cust_base or "openrouter.ai" in cust_base:
-        return CustomAutoResult(
-            success=False,
-            error_message=(
-                "No custom endpoint configured. "
-                "Set model.base_url in config.yaml, or set OPENAI_BASE_URL "
-                "in .env, or run: hermes setup -> Custom OpenAI-compatible endpoint"
-            ),
-        )
-
-    detected_model = _auto_detect_local_model(cust_base)
-    if not detected_model:
-        return CustomAutoResult(
-            success=False,
-            base_url=cust_base,
-            api_key=cust_key,
-            error_message=(
-                f"Custom endpoint at {cust_base} is reachable but no single "
-                f"model was auto-detected. Specify the model explicitly: "
-                f"/model <model-name> --provider custom"
-            ),
-        )
-
-    return CustomAutoResult(
-        success=True,
-        model=detected_model,
-        base_url=cust_base,
-        api_key=cust_key,
-    )

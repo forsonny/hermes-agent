@@ -97,10 +97,11 @@ def _apply_profile_override() -> None:
             consume = 1
             break
 
-    # 2. If no flag, check ~/.hermes/active_profile
+    # 2. If no flag, check active_profile in the hermes root
     if profile_name is None:
         try:
-            active_path = Path.home() / ".hermes" / "active_profile"
+            from hermes_constants import get_default_hermes_root
+            active_path = get_default_hermes_root() / "active_profile"
             if active_path.exists():
                 name = active_path.read_text().strip()
                 if name and name != "default":
@@ -1672,6 +1673,8 @@ def _remove_custom_provider(config):
             title="Select provider to remove:",
         )
         idx = menu.show()
+        from hermes_cli.curses_ui import flush_stdin
+        flush_stdin()
         print()
     except (ImportError, NotImplementedError, OSError, subprocess.SubprocessError):
         for i, c in enumerate(choices, 1):
@@ -1697,8 +1700,9 @@ def _remove_custom_provider(config):
 def _model_flow_named_custom(config, provider_info):
     """Handle a named custom provider from config.yaml custom_providers list.
 
-    If the entry has a saved model name, activates it immediately.
-    Otherwise probes the endpoint's /models API to let the user pick one.
+    Always probes the endpoint's /models API to let the user pick a model.
+    If a model was previously saved, it is pre-selected in the menu.
+    Falls back to the saved model if probing fails.
     """
     from hermes_cli.auth import _save_model_choice, deactivate_provider
     from hermes_cli.config import load_config, save_config
@@ -1709,46 +1713,37 @@ def _model_flow_named_custom(config, provider_info):
     api_key = provider_info.get("api_key", "")
     saved_model = provider_info.get("model", "")
 
-    # If a model is saved, just activate immediately — no probing needed
-    if saved_model:
-        _save_model_choice(saved_model)
-
-        cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = "custom"
-        model["base_url"] = base_url
-        if api_key:
-            model["api_key"] = api_key
-        save_config(cfg)
-        deactivate_provider()
-
-        print(f"✅ Switched to: {saved_model}")
-        print(f"   Provider: {name} ({base_url})")
-        return
-
-    # No saved model — probe endpoint and let user pick
     print(f"  Provider: {name}")
     print(f"  URL:      {base_url}")
+    if saved_model:
+        print(f"  Current:  {saved_model}")
     print()
-    print("No model saved for this provider. Fetching available models...")
+
+    print("Fetching available models...")
     models = fetch_api_models(api_key, base_url, timeout=8.0)
 
     if models:
+        default_idx = 0
+        if saved_model and saved_model in models:
+            default_idx = models.index(saved_model)
+
         print(f"Found {len(models)} model(s):\n")
         try:
             from simple_term_menu import TerminalMenu
-            menu_items = [f"  {m}" for m in models] + ["  Cancel"]
+            menu_items = [
+                f"  {m} (current)" if m == saved_model else f"  {m}"
+                for m in models
+            ] + ["  Cancel"]
             menu = TerminalMenu(
-                menu_items, cursor_index=0,
+                menu_items, cursor_index=default_idx,
                 menu_cursor="-> ", menu_cursor_style=("fg_green", "bold"),
                 menu_highlight_style=("fg_green",),
                 cycle_cursor=True, clear_screen=False,
                 title=f"Select model from {name}:",
             )
             idx = menu.show()
+            from hermes_cli.curses_ui import flush_stdin
+            flush_stdin()
             print()
             if idx is None or idx >= len(models):
                 print("Cancelled.")
@@ -1756,7 +1751,8 @@ def _model_flow_named_custom(config, provider_info):
             model_name = models[idx]
         except (ImportError, NotImplementedError, OSError, subprocess.SubprocessError):
             for i, m in enumerate(models, 1):
-                print(f"  {i}. {m}")
+                suffix = " (current)" if m == saved_model else ""
+                print(f"  {i}. {m}{suffix}")
             print(f"  {len(models) + 1}. Cancel")
             print()
             try:
@@ -1772,6 +1768,13 @@ def _model_flow_named_custom(config, provider_info):
             except (ValueError, KeyboardInterrupt, EOFError):
                 print("\nCancelled.")
                 return
+    elif saved_model:
+        print("Could not fetch models from endpoint.")
+        try:
+            model_name = input(f"Model name [{saved_model}]: ").strip() or saved_model
+        except (KeyboardInterrupt, EOFError):
+            print("\nCancelled.")
+            return
     else:
         print("Could not fetch models from endpoint. Enter model name manually.")
         try:
@@ -1867,6 +1870,8 @@ def _prompt_reasoning_effort_selection(efforts, current_effort=""):
             title="Select reasoning effort:",
         )
         idx = menu.show()
+        from hermes_cli.curses_ui import flush_stdin
+        flush_stdin()
         if idx is None:
             return None
         print()
@@ -3309,10 +3314,11 @@ def _invalidate_update_cache():
     ``hermes update``, every profile is now current.
     """
     homes = []
-    # Default profile home
-    default_home = Path.home() / ".hermes"
+    # Default profile home (Docker-aware — uses /opt/data in Docker)
+    from hermes_constants import get_default_hermes_root
+    default_home = get_default_hermes_root()
     homes.append(default_home)
-    # Named profiles under ~/.hermes/profiles/
+    # Named profiles under <root>/profiles/
     profiles_root = default_home / "profiles"
     if profiles_root.is_dir():
         for entry in profiles_root.iterdir():
@@ -4049,7 +4055,10 @@ def cmd_profile(args):
             print(f"  {name} chat               Start chatting")
             print(f"  {name} gateway start      Start the messaging gateway")
             if clone or clone_all:
-                profile_dir_display = f"~/.hermes/profiles/{name}"
+                try:
+                    profile_dir_display = "~/" + str(profile_dir.relative_to(Path.home()))
+                except ValueError:
+                    profile_dir_display = str(profile_dir)
                 print(f"\n  Edit {profile_dir_display}/.env for different API keys")
                 print(f"  Edit {profile_dir_display}/SOUL.md for different personality")
             print()
