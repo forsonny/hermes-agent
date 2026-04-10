@@ -814,6 +814,7 @@ def list_authenticated_providers(
     from hermes_cli.auth import PROVIDER_REGISTRY as _auth_registry
 
     # Build reverse mapping: models.dev ID → Hermes provider ID.
+    # Build reverse mapping: models.dev ID -> Hermes provider ID.
     # HERMES_OVERLAYS keys may be models.dev IDs (e.g. "github-copilot")
     # while _PROVIDER_MODELS and config.yaml use Hermes IDs ("copilot").
     _mdev_to_hermes = {v: k for k, v in PROVIDER_TO_MODELS_DEV.items()}
@@ -823,6 +824,7 @@ def list_authenticated_providers(
             continue
 
         # Resolve Hermes slug — e.g. "github-copilot" → "copilot"
+        # Resolve Hermes slug — e.g. "github-copilot" -> "copilot"
         hermes_slug = _mdev_to_hermes.get(pid, pid)
         if hermes_slug in seen_slugs:
             continue
