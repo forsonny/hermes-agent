@@ -49,9 +49,18 @@ def jittered_backoff(
     else:
         delay = min(base_delay * (2 ** exponent), max_delay)
 
+    if delay <= 0 or jitter_ratio <= 0:
+        return max(delay, 0.0)
+
+    # Negative jitter ratios are treated as disabled jitter instead of
+    # producing inverted ranges or negative delays.
+    jitter_ceiling = max(0.0, jitter_ratio * delay)
+    if jitter_ceiling == 0:
+        return delay
+
     # Seed from time + counter for decorrelation even with coarse clocks.
     seed = (time.time_ns() ^ (tick * 0x9E3779B9)) & 0xFFFFFFFF
     rng = random.Random(seed)
-    jitter = rng.uniform(0, jitter_ratio * delay)
+    jitter = rng.uniform(0, jitter_ceiling)
 
     return delay + jitter

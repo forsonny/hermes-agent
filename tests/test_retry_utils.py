@@ -30,6 +30,12 @@ def test_backoff_adds_jitter():
     assert all(d <= 15.0 for d in delays), "jittered delay should be bounded"
 
 
+def test_backoff_negative_jitter_ratio_disables_jitter():
+    """Negative jitter ratios should fall back to the base exponential delay."""
+    delays = [jittered_backoff(2, base_delay=7.0, max_delay=120.0, jitter_ratio=-0.5) for _ in range(10)]
+    assert delays == [14.0] * 10
+
+
 def test_backoff_attempt_1_is_base():
     """First attempt delay should equal base_delay (with no jitter)."""
     delay = jittered_backoff(1, base_delay=3.0, max_delay=120.0, jitter_ratio=0.0)
@@ -40,6 +46,12 @@ def test_backoff_with_zero_base_delay_returns_max():
     """base_delay=0 should return max_delay (guard against busy-wait)."""
     delay = jittered_backoff(1, base_delay=0.0, max_delay=60.0, jitter_ratio=0.0)
     assert delay == 60.0
+
+
+def test_backoff_with_zero_max_delay_returns_zero():
+    """Zero max_delay should clamp to an immediate retry without negative jitter."""
+    delay = jittered_backoff(3, base_delay=5.0, max_delay=0.0, jitter_ratio=0.5)
+    assert delay == 0.0
 
 
 def test_backoff_with_extreme_attempt_returns_max():
