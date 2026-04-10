@@ -276,7 +276,7 @@ def _compute_grace_seconds(schedule: dict) -> int:
             grace = period_seconds // 2
             return max(MIN_GRACE, min(grace, MAX_GRACE))
         except Exception:
-            pass
+            logger.debug("Failed to compute cron period for grace calculation, using default")
 
     return MIN_GRACE
 

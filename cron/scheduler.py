@@ -129,6 +129,7 @@ def _resolve_delivery_target(job: dict) -> Optional[dict]:
                 else:
                     chat_id = resolved
         except Exception:
+            logger.debug("Failed to resolve channel name '%s' on %s", chat_id, platform_key)
             pass
 
         return {
@@ -265,7 +266,7 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
         user_cfg = load_config()
         wrap_response = user_cfg.get("cron", {}).get("wrap_response", True)
     except Exception:
-        pass
+        logger.debug("Could not load config for cron.wrap_response, using default True")
 
     if wrap_response:
         task_name = job.get("name", job["id"])
@@ -418,7 +419,7 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
             from agent.redact import redact_sensitive_text
             stdout = redact_sensitive_text(stdout)
         except Exception:
-            pass
+            logger.warning("Failed to redact secrets in script output for '%s'", path)
         return True, stdout
 
     except subprocess.TimeoutExpired:
@@ -703,7 +704,7 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
                             _act = agent.get_activity_summary()
                             _idle_secs = _act.get("seconds_since_activity", 0.0)
                         except Exception:
-                            pass
+                            logger.debug("Failed to get activity summary during inactivity check")
                     if _idle_secs >= _cron_inactivity_limit:
                         _inactivity_timeout = True
                         break
@@ -720,7 +721,7 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
                 try:
                     _activity = agent.get_activity_summary()
                 except Exception:
-                    pass
+                    logger.debug("Failed to get activity summary for inactivity timeout diagnostic")
             _last_desc = _activity.get("last_activity_desc", "unknown")
             _secs_ago = _activity.get("seconds_since_activity", 0)
             _cur_tool = _activity.get("current_tool")
