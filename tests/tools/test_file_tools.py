@@ -311,4 +311,182 @@ class TestSearchHints:
         assert "offset=100" in raw
 
 
+# ---------------------------------------------------------------------------
+# Dependency change detection hint tests
+# ---------------------------------------------------------------------------
+
+class TestWriteFileDependencyHint:
+    """write_file_tool should hint when a dependency file is modified."""
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_requirements_txt_hint(self, mock_get):
+        mock_ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"status": "ok", "path": "/tmp/requirements.txt"}
+        mock_ops.write_file.return_value = result_obj
+        mock_get.return_value = mock_ops
+
+        from tools.file_tools import write_file_tool
+        raw = write_file_tool("/tmp/requirements.txt", "flask==2.0")
+        assert "[Hint:" in raw
+        assert "pip install -r requirements.txt" in raw
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_package_json_hint(self, mock_get):
+        mock_ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"status": "ok", "path": "/tmp/package.json"}
+        mock_ops.write_file.return_value = result_obj
+        mock_get.return_value = mock_ops
+
+        from tools.file_tools import write_file_tool
+        raw = write_file_tool("/tmp/package.json", '{"dependencies": {}}')
+        assert "[Hint:" in raw
+        assert "npm install" in raw
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_cargo_toml_hint(self, mock_get):
+        mock_ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"status": "ok", "path": "/tmp/Cargo.toml"}
+        mock_ops.write_file.return_value = result_obj
+        mock_get.return_value = mock_ops
+
+        from tools.file_tools import write_file_tool
+        raw = write_file_tool("/tmp/Cargo.toml", '[dependencies]')
+        assert "[Hint:" in raw
+        assert "cargo build" in raw
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_non_dependency_no_hint(self, mock_get):
+        mock_ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"status": "ok", "path": "/tmp/main.py"}
+        mock_ops.write_file.return_value = result_obj
+        mock_get.return_value = mock_ops
+
+        from tools.file_tools import write_file_tool
+        raw = write_file_tool("/tmp/main.py", "print('hi')")
+        assert "Dependency" not in raw
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_write_error_no_hint(self, mock_get):
+        mock_ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"error": "write failed"}
+        mock_ops.write_file.return_value = result_obj
+        mock_get.return_value = mock_ops
+
+        from tools.file_tools import write_file_tool
+        raw = write_file_tool("/tmp/requirements.txt", "flask==2.0")
+        # Error results should not get dependency hints
+        assert "Dependency" not in raw
+
+
+class TestPatchDependencyHint:
+    """patch_tool should hint when a dependency file is modified."""
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_patch_requirements_txt_hint(self, mock_get):
+        mock_ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"success": True, "diff": "--- a\n+++ b"}
+        mock_ops.patch_replace.return_value = result_obj
+        mock_get.return_value = mock_ops
+
+        from tools.file_tools import patch_tool
+        raw = patch_tool(
+            mode="replace", path="/tmp/requirements.txt",
+            old_string="flask==1.0", new_string="flask==2.0"
+        )
+        assert "[Hint:" in raw
+        assert "pip install -r requirements.txt" in raw
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_patch_pyproject_toml_hint(self, mock_get):
+        mock_ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"success": True, "diff": "--- a\n+++ b"}
+        mock_ops.patch_replace.return_value = result_obj
+        mock_get.return_value = mock_ops
+
+        from tools.file_tools import patch_tool
+        raw = patch_tool(
+            mode="replace", path="/tmp/pyproject.toml",
+            old_string='version = "1.0"', new_string='version = "2.0"'
+        )
+        assert "[Hint:" in raw
+        assert "pip install -e ." in raw
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_patch_non_dependency_no_hint(self, mock_get):
+        mock_ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"success": True, "diff": "--- a\n+++ b"}
+        mock_ops.patch_replace.return_value = result_obj
+        mock_get.return_value = mock_ops
+
+        from tools.file_tools import patch_tool
+        raw = patch_tool(
+            mode="replace", path="/tmp/config.yaml",
+            old_string="key: val", new_string="key: new"
+        )
+        assert "Dependency" not in raw
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_v4a_patch_with_dependency_file_hint(self, mock_get):
+        mock_ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"success": True, "operations": 1}
+        mock_ops.patch_v4a.return_value = result_obj
+        mock_get.return_value = mock_ops
+
+        from tools.file_tools import patch_tool
+        raw = patch_tool(
+            mode="patch",
+            patch="*** Begin Patch\n*** Update File: package.json\n@@ @@\n-old\n+new\n*** End Patch"
+        )
+        assert "[Hint:" in raw
+        assert "npm install" in raw
+
+
+class TestDependencyInstallHintFunction:
+    """Unit tests for _dependency_install_hint helper."""
+
+    def test_known_dependency_files(self):
+        from tools.file_tools import _dependency_install_hint
+        assert _dependency_install_hint("requirements.txt") is not None
+        assert _dependency_install_hint("package.json") is not None
+        assert _dependency_install_hint("Cargo.toml") is not None
+        assert _dependency_install_hint("go.mod") is not None
+        assert _dependency_install_hint("Gemfile") is not None
+
+    def test_unknown_files_return_none(self):
+        from tools.file_tools import _dependency_install_hint
+        assert _dependency_install_hint("main.py") is None
+        assert _dependency_install_hint("config.yaml") is None
+        assert _dependency_install_hint("README.md") is None
+
+    def test_path_with_directories(self):
+        from tools.file_tools import _dependency_install_hint
+        hint = _dependency_install_hint("/home/user/project/requirements.txt")
+        assert hint is not None
+        assert "pip install -r requirements.txt" in hint
+
+    def test_hint_contains_install_command(self):
+        from tools.file_tools import _dependency_install_hint
+        hint = _dependency_install_hint("package.json")
+        assert "npm install" in hint
+
+    def test_poetry_lock_hint(self):
+        from tools.file_tools import _dependency_install_hint
+        hint = _dependency_install_hint("poetry.lock")
+        assert "poetry install" in hint
+
+    def test_uv_lock_hint(self):
+        from tools.file_tools import _dependency_install_hint
+        hint = _dependency_install_hint("uv.lock")
+        assert "uv sync" in hint
+
+
 

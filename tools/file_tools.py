@@ -537,6 +537,50 @@ def _update_read_timestamp(filepath: str, task_id: str) -> None:
             task_data.setdefault("read_timestamps", {})[resolved] = current_mtime
 
 
+# ---------------------------------------------------------------------------
+# Dependency change detection
+# ---------------------------------------------------------------------------
+
+# Map of dependency filenames (basename) → install hint.
+_DEPENDENCY_FILES = {
+    "requirements.txt": "pip install -r requirements.txt",
+    "requirements-dev.txt": "pip install -r requirements-dev.txt",
+    "requirements-test.txt": "pip install -r requirements-test.txt",
+    "constraints.txt": "pip install -c constraints.txt -r requirements.txt",
+    "pyproject.toml": "pip install -e .",
+    "setup.py": "pip install -e .",
+    "setup.cfg": "pip install -e .",
+    "package.json": "npm install",
+    "yarn.lock": "yarn install",
+    "pnpm-lock.yaml": "pnpm install",
+    "bun.lockb": "bun install",
+    "Cargo.toml": "cargo build",
+    "go.mod": "go mod download",
+    "go.sum": "go mod download",
+    "Gemfile": "bundle install",
+    "Pipfile": "pipenv install",
+    "poetry.lock": "poetry install",
+    "uv.lock": "uv sync",
+}
+
+
+def _dependency_install_hint(filepath: str) -> str | None:
+    """Return an install hint if *filepath* is a dependency manifest.
+
+    Checks the basename against a known set of dependency files.  Returns a
+    short hint string the LLM can act on, or None for non-dependency files.
+    """
+    import os as _os
+    basename = _os.path.basename(filepath)
+    install_cmd = _DEPENDENCY_FILES.get(basename)
+    if install_cmd:
+        return (
+            f"Dependency file '{basename}' was modified. "
+            f"Consider running `{install_cmd}` to update installed packages."
+        )
+    return None
+
+
 def _check_file_staleness(filepath: str, task_id: str) -> str | None:
     """Check whether a file was modified since the agent last read it.
 
@@ -583,7 +627,13 @@ def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
         # Refresh the stored timestamp so consecutive writes by this
         # task don't trigger false staleness warnings.
         _update_read_timestamp(path, task_id)
-        return json.dumps(result_dict, ensure_ascii=False)
+        result_json = json.dumps(result_dict, ensure_ascii=False)
+        # Hint when a dependency manifest was modified
+        if not result_dict.get("error"):
+            dep_hint = _dependency_install_hint(path)
+            if dep_hint:
+                result_json += f"\n\n[Hint: {dep_hint}]"
+        return result_json
     except Exception as e:
         if _is_expected_write_exception(e):
             logger.debug("write_file expected denial: %s: %s", type(e).__name__, e)
@@ -644,6 +694,15 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
         # retries with stale content instead of re-reading the file.
         if result_dict.get("error") and "Could not find" in str(result_dict["error"]):
             result_json += "\n\n[Hint: old_string not found. Use read_file to verify the current content, or search_files to locate the text.]"
+        # Hint when a dependency manifest was modified
+        if not result_dict.get("error"):
+            dep_hints = []
+            for _p in _paths_to_check:
+                _dh = _dependency_install_hint(_p)
+                if _dh:
+                    dep_hints.append(_dh)
+            if dep_hints:
+                result_json += "\n\n[Hint: " + " ".join(dep_hints) + "]"
         return result_json
     except Exception as e:
         return tool_error(str(e))
