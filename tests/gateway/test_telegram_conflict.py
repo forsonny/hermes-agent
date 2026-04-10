@@ -98,6 +98,8 @@ async def test_polling_conflict_retries_before_fatal(monkeypatch):
     )
     builder = MagicMock()
     builder.token.return_value = builder
+    builder.request.return_value = builder
+    builder.get_updates_request.return_value = builder
     builder.build.return_value = app
     monkeypatch.setattr("gateway.platforms.telegram.Application", SimpleNamespace(builder=MagicMock(return_value=builder)))
 
@@ -172,6 +174,8 @@ async def test_polling_conflict_becomes_fatal_after_retries(monkeypatch):
     )
     builder = MagicMock()
     builder.token.return_value = builder
+    builder.request.return_value = builder
+    builder.get_updates_request.return_value = builder
     builder.build.return_value = app
     monkeypatch.setattr("gateway.platforms.telegram.Application", SimpleNamespace(builder=MagicMock(return_value=builder)))
 
@@ -216,6 +220,8 @@ async def test_connect_marks_retryable_fatal_error_for_startup_network_failure(m
 
     builder = MagicMock()
     builder.token.return_value = builder
+    builder.request.return_value = builder
+    builder.get_updates_request.return_value = builder
     app = SimpleNamespace(
         bot=SimpleNamespace(delete_webhook=AsyncMock(), set_my_commands=AsyncMock()),
         updater=SimpleNamespace(),
@@ -265,6 +271,8 @@ async def test_connect_clears_webhook_before_polling(monkeypatch):
     )
     builder = MagicMock()
     builder.token.return_value = builder
+    builder.request.return_value = builder
+    builder.get_updates_request.return_value = builder
     builder.build.return_value = app
     monkeypatch.setattr(
         "gateway.platforms.telegram.Application",
