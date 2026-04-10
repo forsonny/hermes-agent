@@ -101,6 +101,7 @@ from agent.display import (
     get_cute_tool_message as _get_cute_tool_message_impl,
     _detect_tool_failure,
     get_tool_emoji as _get_tool_emoji,
+    format_tool_timing_footer as _format_tool_timing_footer,
 )
 from agent.trajectory import (
     convert_scratchpad_to_think, has_incomplete_scratchpad,
@@ -1110,6 +1111,7 @@ class AIAgent:
         self._memory_flush_min_turns = 6
         self._turns_since_memory = 0
         self._iters_since_skill = 0
+        self._turn_tool_timings: list[tuple[str, float]] = []  # (tool_name, duration) per turn
         if not skip_memory:
             try:
                 mem_config = _agent_cfg.get("memory", {})
@@ -6608,6 +6610,7 @@ class AIAgent:
 
             self._current_tool = None
             self._touch_activity(f"tool completed: {name} ({tool_duration:.1f}s)")
+            self._turn_tool_timings.append((name, tool_duration))
 
             if self.tool_complete_callback:
                 try:
@@ -6912,6 +6915,7 @@ class AIAgent:
 
             self._current_tool = None
             self._touch_activity(f"tool completed: {function_name} ({tool_duration:.1f}s)")
+            self._turn_tool_timings.append((function_name, tool_duration))
 
             if self.verbose_logging:
                 logging.debug(f"Tool {function_name} completed in {tool_duration:.2f}s")
@@ -7269,6 +7273,7 @@ class AIAgent:
         self._last_content_with_tools = None
         self._mute_post_response = False
         self._unicode_sanitization_passes = 0
+        self._turn_tool_timings = []  # reset per-turn timing accumulator
 
         # Pre-turn connection health check: detect and clean up dead TCP
         # connections left over from provider outages or dropped streams.
@@ -9610,6 +9615,17 @@ class AIAgent:
         
         # Determine if conversation completed successfully
         completed = final_response is not None and api_call_count < self.max_iterations
+
+        # ── Tool timing footer ──────────────────────────────────────────
+        # Print a one-line summary of all tool timings for this turn.
+        # Shown when 2+ tools were called (in both quiet and verbose mode).
+        if self._turn_tool_timings:
+            try:
+                _footer = _format_tool_timing_footer(self._turn_tool_timings)
+                if _footer:
+                    self._safe_print(f"  {_footer}")
+            except Exception:
+                pass  # never block the final response
 
         # Save trajectory if enabled
         self._save_trajectory(messages, user_message, completed)

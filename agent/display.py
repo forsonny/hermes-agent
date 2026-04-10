@@ -925,6 +925,39 @@ def get_cute_tool_message(
 
 
 # =========================================================================
+# Tool timing footer — aggregate summary after a conversation turn
+# =========================================================================
+
+def format_tool_timing_footer(timings: list[tuple[str, float]]) -> str | None:
+    """Format a one-line timing summary for the end of a conversation turn.
+
+    *timings* is a list of ``(tool_name, duration_seconds)`` tuples collected
+    across all tool calls in the turn.  Returns ``None`` when there are fewer
+    than 2 tool calls (nothing meaningful to summarise).
+
+    Example output::
+
+        ┊ ⏱  5 tools in 12.3s — slowest: browser_navigate 5.1s
+    """
+    if not timings or len(timings) < 2:
+        return None
+
+    total = sum(d for _, d in timings)
+    count = len(timings)
+
+    # Find the slowest tool
+    slowest_name, slowest_dur = max(timings, key=lambda t: t[1])
+
+    skin_prefix = get_skin_tool_prefix()
+    line = f"┊ ⏱  {count} tools in {total:.1f}s — slowest: {slowest_name} {slowest_dur:.1f}s"
+
+    if skin_prefix != "┊":
+        line = line.replace("┊", skin_prefix, 1)
+
+    return line
+
+
+# =========================================================================
 # Honcho session line (one-liner with clickable OSC 8 hyperlink)
 # =========================================================================
 
