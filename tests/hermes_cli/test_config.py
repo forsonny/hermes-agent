@@ -58,6 +58,31 @@ class TestEnsureHermesHome:
             ensure_hermes_home()
             assert soul_path.read_text(encoding="utf-8") == "custom soul"
 
+    def test_managed_mode_requires_precreated_subdirs(self, tmp_path):
+        home = tmp_path / ".hermes"
+        home.mkdir()
+        with patch.dict(os.environ, {"HERMES_HOME": str(home), "HERMES_MANAGED": "nixos"}, clear=False):
+            try:
+                ensure_hermes_home()
+            except RuntimeError as exc:
+                assert "Run 'sudo nixos-rebuild switch' first." in str(exc)
+            else:
+                raise AssertionError("Expected managed-mode ensure_hermes_home to require precreated subdirs")
+
+    def test_managed_mode_preserves_existing_group_permissions(self, tmp_path):
+        home = tmp_path / ".hermes"
+        home.mkdir(mode=0o750)
+        for subdir in ("cron", "sessions", "logs", "memories"):
+            (home / subdir).mkdir(mode=0o750)
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(home), "HERMES_MANAGED": "nixos"}, clear=False):
+            ensure_hermes_home()
+
+        if os.name != "nt":
+            assert (home.stat().st_mode & 0o777) == 0o750
+            for subdir in ("cron", "sessions", "logs", "memories"):
+                assert ((home / subdir).stat().st_mode & 0o777) == 0o750
+
 
 class TestLoadConfigDefaults:
     def test_returns_defaults_when_no_file(self, tmp_path):
@@ -145,9 +170,23 @@ class TestSaveEnvValueSecure:
             return
 
         with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
-            save_env_value("TENOR_API_KEY", "sk-test-secret")
+            save_env_value("TENOR_API_KEY", "***")
             env_mode = (tmp_path / ".env").stat().st_mode & 0o777
             assert env_mode == 0o600
+
+    def test_save_env_value_preserves_managed_group_permissions(self, tmp_path):
+        if os.name == "nt":
+            return
+
+        env_path = tmp_path / ".env"
+        env_path.write_text("EXISTING_KEY=value\n")
+        os.chmod(env_path, 0o640)
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path), "HERMES_MANAGED": "nixos"}, clear=False):
+            save_env_value("TENOR_API_KEY", "***")
+
+        env_mode = env_path.stat().st_mode & 0o777
+        assert env_mode == 0o640
 
 
 class TestRemoveEnvValue:
