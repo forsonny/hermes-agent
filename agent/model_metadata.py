@@ -296,7 +296,7 @@ def detect_local_server_type(base_url: str) -> Optional[str]:
                 if r.status_code == 200:
                     return "lm-studio"
             except Exception:
-                pass
+                pass  # LM Studio /api/v1/models probe failed
             # Ollama exposes /api/tags and responds with {"models": [...]}
             # LM Studio returns {"error": "Unexpected endpoint"} with status 200
             # on this path, so we must verify the response contains "models".
@@ -308,9 +308,9 @@ def detect_local_server_type(base_url: str) -> Optional[str]:
                         if "models" in data:
                             return "ollama"
                     except Exception:
-                        pass
+                        pass  # Ollama JSON parse failed
             except Exception:
-                pass
+                pass  # Ollama /api/tags probe failed
             # llama.cpp exposes /v1/props (older builds used /props without the /v1 prefix)
             try:
                 r = client.get(f"{server_url}/v1/props")
@@ -319,7 +319,7 @@ def detect_local_server_type(base_url: str) -> Optional[str]:
                 if r.status_code == 200 and "default_generation_settings" in r.text:
                     return "llamacpp"
             except Exception:
-                pass
+                pass  # llama.cpp /props probe failed
             # vLLM: /version
             try:
                 r = client.get(f"{server_url}/version")
@@ -328,9 +328,9 @@ def detect_local_server_type(base_url: str) -> Optional[str]:
                     if "version" in data:
                         return "vllm"
             except Exception:
-                pass
+                pass  # vLLM /version probe failed
     except Exception:
-        pass
+        pass  # all server probes failed (connection error)
 
     return None
 
@@ -521,7 +521,7 @@ def fetch_endpoint_model_metadata(
                         if n_ctx and model_alias and model_alias in cache:
                             cache[model_alias]["context_length"] = n_ctx
                 except Exception:
-                    pass
+                    pass  # llama.cpp /props query failed (non-critical)
 
             _endpoint_model_metadata_cache[normalized] = cache
             _endpoint_model_metadata_cache_time[normalized] = time.time()
@@ -731,7 +731,7 @@ def query_ollama_num_ctx(model: str, base_url: str) -> Optional[int]:
                 if "context_length" in key and isinstance(value, (int, float)):
                     return int(value)
     except Exception:
-        pass
+        logger.debug("query_ollama_num_ctx(%s, %s) failed", model, base_url, exc_info=True)
     return None
 
 
@@ -820,7 +820,7 @@ def _query_local_context_length(model: str, base_url: str) -> Optional[int]:
                         if ctx and isinstance(ctx, (int, float)):
                             return int(ctx)
     except Exception:
-        pass
+        logger.debug("_query_local_context_length(%s, %s) failed", model, base_url, exc_info=True)
 
     return None
 
