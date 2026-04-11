@@ -21,15 +21,26 @@ def _make_runner():
     runner._running_agents = {}
     runner._pending_messages = {}
     runner._pending_approvals = {}
+    runner._pending_model_notes = {}
     runner._voice_mode = {}
+    runner._running_agents_ts = {}
+    runner._background_tasks = set()
     runner._is_user_authorized = lambda _source: True
+    runner.pairing_store = MagicMock()
+    runner._update_prompt_pending = {}
+    runner._session_model_overrides = {}
+    runner._draining = False
+    runner._restart_requested = False
+    runner.hooks = MagicMock()
+    runner.hooks.emit = MagicMock()
+    runner.delivery_router = MagicMock()
     return runner
 
 
 @pytest.mark.asyncio
 async def test_handle_message_does_not_priority_interrupt_photo_followup():
     runner = _make_runner()
-    source = SessionSource(platform=Platform.TELEGRAM, chat_id="12345", chat_type="dm")
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="12345", chat_type="dm", user_id="photo_test_user")
     session_key = build_session_key(source)
     running_agent = MagicMock()
     runner._running_agents[session_key] = running_agent

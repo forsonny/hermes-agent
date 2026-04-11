@@ -140,6 +140,7 @@ async def test_run_agent_progress_stays_in_originating_topic(monkeypatch, tmp_pa
         chat_id="-1001",
         chat_type="group",
         thread_id="17585",
+        user_id="test_progress_user",
     )
 
     result = await runner._run_agent(

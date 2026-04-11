@@ -50,7 +50,11 @@ def _make_runner():
     runner._stop_task = None
     runner._exit_code = None
     runner._update_runtime_status = MagicMock()
+    runner._pending_model_notes = {}
     runner._is_user_authorized = lambda _source: True
+    runner.pairing_store = MagicMock()
+    runner._update_prompt_pending = {}
+    runner._session_model_overrides = {}
     runner.hooks = MagicMock()
     runner.hooks.emit = AsyncMock()
     runner.session_store = MagicMock()
@@ -60,7 +64,8 @@ def _make_runner():
 
 def _make_event(text="hello", chat_id="12345"):
     source = SessionSource(
-        platform=Platform.TELEGRAM, chat_id=chat_id, chat_type="dm"
+        platform=Platform.TELEGRAM, chat_id=chat_id, chat_type="dm",
+        user_id="test_race_user",
     )
     return MessageEvent(text=text, message_type=MessageType.TEXT, source=source)
 

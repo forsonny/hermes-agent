@@ -371,9 +371,9 @@ class TestExpiredCodexFallback:
 
 
     def test_hermes_oauth_file_sets_oauth_flag(self, monkeypatch):
-        """OAuth-style tokens should get is_oauth=*** (token is not sk-ant-api-*)."""
+        """OAuth-style tokens (sk-ant-oat-*) should set is_oauth=True."""
         # Mock resolve_anthropic_token to return an OAuth-style token
-        with patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="hermes-oauth-jwt-token"), \
+        with patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="sk-ant-oat-test-oauth-token"), \
              patch("agent.anthropic_adapter.build_anthropic_client") as mock_build, \
              patch("agent.auxiliary_client._select_pool_entry", return_value=(False, None)):
             mock_build.return_value = MagicMock()
@@ -381,7 +381,7 @@ class TestExpiredCodexFallback:
             client, model = _try_anthropic()
             assert client is not None, "Should resolve token"
             adapter = client.chat.completions
-            assert adapter._is_oauth is True, "Non-sk-ant-api token should set is_oauth=True"
+            assert adapter._is_oauth is True, "sk-ant-oat-* token should set is_oauth=True"
 
     def test_jwt_missing_exp_passes_through(self, tmp_path, monkeypatch):
         """JWT with valid JSON but no exp claim should pass through."""
@@ -428,7 +428,7 @@ class TestExpiredCodexFallback:
 
     def test_claude_code_oauth_env_sets_flag(self, monkeypatch):
         """CLAUDE_CODE_OAUTH_TOKEN env var should get is_oauth=True."""
-        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-oauth-token-test")
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-cc-test")
         monkeypatch.delenv("ANTHROPIC_TOKEN", raising=False)
         with patch("agent.anthropic_adapter.build_anthropic_client") as mock_build:
             mock_build.return_value = MagicMock()
