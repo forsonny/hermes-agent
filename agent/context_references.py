@@ -15,7 +15,7 @@ from agent.model_metadata import estimate_tokens_rough
 
 _QUOTED_REFERENCE_VALUE = r'(?:`[^`\n]+`|"[^"\n]+"|\'[^\'\n]+\')'
 REFERENCE_PATTERN = re.compile(
-    rf"(?<![\w/])@(?:(?P<simple>diff|staged)\b|(?P<kind>file|folder|git|url):(?P<value>{_QUOTED_REFERENCE_VALUE}(?::\d+(?:-\d+)?)?|\S+))"
+    rf"(?<![\w/])@(?:(?P<simple>diff|staged)\b|(?P<kind>file|folder|git|map|url):(?P<value>{_QUOTED_REFERENCE_VALUE}(?::\d+(?:-\d+)?)?|\S+))"
 )
 TRAILING_PUNCTUATION = ",.;!?"
 _SENSITIVE_HOME_DIRS = (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".config/gh")
@@ -227,6 +227,8 @@ async def _expand_reference(
             if not content:
                 return f"{ref.raw}: no content extracted", None
             return None, f"🌐 {ref.raw} ({estimate_tokens_rough(content)} tokens)\n{content}"
+        if ref.kind == "map":
+            return _expand_map_reference(ref, cwd, allowed_root=allowed_root)
     except Exception as exc:
         return f"{ref.raw}: {exc}", None
 
@@ -275,6 +277,149 @@ def _expand_folder_reference(
 
     listing = _build_folder_listing(path, cwd)
     return None, f"📁 {ref.raw} ({estimate_tokens_rough(listing)} tokens)\n{listing}"
+
+
+def _expand_map_reference(
+    ref: ContextReference,
+    cwd: Path,
+    *,
+    allowed_root: Path | None = None,
+) -> tuple[str | None, str | None]:
+    """Generate a compact code-structure map of a directory using Python's ``ast`` module.
+
+    The target defaults to ``.`` (cwd).  For each Python file discovered the map
+    lists top-level classes (with methods) and top-level functions together with
+    their signatures — similar to Aider's repo-map but with zero external
+    dependencies.
+    """
+    import ast as _ast
+    import token as _token
+    import tokenize as _tokenize
+
+    # Resolve the directory to scan
+    raw_target = ref.target or "."
+    path = _resolve_path(cwd, raw_target, allowed_root=allowed_root)
+    _ensure_reference_path_allowed(path)
+    if not path.exists():
+        return f"{ref.raw}: path not found", None
+    if path.is_file():
+        path = path.parent
+
+    # Collect Python files (skip venv, __pycache__, .git, node_modules)
+    _SKIP_DIRS = {
+        "venv", ".venv", "__pycache__", ".git", "node_modules",
+        ".tox", ".mypy_cache", ".pytest_cache", "dist", "build", "egg-info",
+    }
+    py_files: list[Path] = []
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
+        for f in sorted(files):
+            if f.endswith(".py"):
+                py_files.append(Path(root) / f)
+        if len(py_files) >= 80:
+            break
+
+    if not py_files:
+        return f"{ref.raw}: no Python files found", None
+
+    lines: list[str] = []
+    total_symbols = 0
+
+    for fpath in py_files:
+        rel = fpath.relative_to(cwd) if fpath.is_relative_to(cwd) else fpath.relative_to(path)
+        try:
+            source = fpath.read_text(encoding="utf-8", errors="replace")
+            tree = _ast.parse(source, filename=str(fpath))
+        except (SyntaxError, UnicodeDecodeError):
+            # Skip files we can't parse
+            continue
+
+        file_entries: list[str] = []
+
+        for node in _ast.iter_child_nodes(tree):
+            if isinstance(node, _ast.ClassDef):
+                sig = _format_class_sig(node)
+                file_entries.append(f"  class {node.name}{sig}")
+                total_symbols += 1
+                # Methods
+                for item in node.body:
+                    if isinstance(item, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                        mname = item.name
+                        if mname.startswith("_") and mname != "__init__":
+                            continue  # skip private helpers
+                        msig = _format_func_sig(item)
+                        file_entries.append(f"    def {mname}{msig}")
+                        total_symbols += 1
+            elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                sig = _format_func_sig(node)
+                file_entries.append(f"  def {node.name}{sig}")
+                total_symbols += 1
+
+        if file_entries:
+            lines.append(f"{rel}")
+            lines.extend(file_entries)
+
+    if not lines:
+        return f"{ref.raw}: no symbols found in {len(py_files)} Python files", None
+
+    content = "\n".join(lines)
+    label = f"@map:{raw_target}" if raw_target != "." else "@map:."
+    return None, f"🗺️  {label} — {total_symbols} symbols from {len(py_files)} files ({estimate_tokens_rough(content)} tokens)\n{content}"
+
+
+def _format_func_sig(node: "ast.FunctionDef | ast.AsyncFunctionDef") -> str:
+    """Format a function signature string from an AST node."""
+    import ast as _ast
+    args_parts: list[str] = []
+    pos_only = getattr(node.args, "posonlyargs", [])
+    all_args = list(pos_only) + node.args.args
+    defaults = node.args.defaults
+    # defaults align to the end of args
+    n_defaults = len(defaults)
+    n_args = len(all_args)
+    for i, arg in enumerate(all_args):
+        if arg.arg == "self" or arg.arg == "cls":
+            continue
+        s = arg.arg
+        ann = arg.annotation
+        if ann:
+            s += f": {_ast.unparse(ann)}"
+        default_idx = i - (n_args - n_defaults)
+        if default_idx >= 0 and default_idx < n_defaults:
+            s += f" = {_ast.unparse(defaults[default_idx])}"
+        args_parts.append(s)
+    # *args
+    if node.args.vararg:
+        s = f"*{node.args.vararg.arg}"
+        ann = node.args.vararg.annotation
+        if ann:
+            s += f": {_ast.unparse(ann)}"
+        args_parts.append(s)
+    elif defaults and not any(
+        a.arg in ("self", "cls") for a in all_args
+    ):
+        if not any(p.startswith("*") for p in args_parts):
+            args_parts.append("*")
+    # **kwargs
+    if node.args.kwarg:
+        s = f"**{node.args.kwarg.arg}"
+        ann = node.args.kwarg.annotation
+        if ann:
+            s += f": {_ast.unparse(ann)}"
+        args_parts.append(s)
+    ret = ""
+    if node.returns:
+        ret = f" -> {_ast.unparse(node.returns)}"
+    return f"({', '.join(args_parts)}){ret}"
+
+
+def _format_class_sig(node: "ast.ClassDef") -> str:
+    """Format class bases for display."""
+    import ast as _ast
+    if not node.bases:
+        return ""
+    bases = [_ast.unparse(b) for b in node.bases]
+    return f"({', '.join(bases)})"
 
 
 def _expand_git_reference(

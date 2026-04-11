@@ -308,3 +308,108 @@ async def test_blocks_sensitive_home_and_hermes_paths(tmp_path: Path, monkeypatc
     assert "API_KEY=super-secret" not in result.message
     assert "PRIVATE-KEY" not in result.message
     assert any("sensitive credential" in warning for warning in result.warnings)
+
+def test_parse_map_reference():
+    from agent.context_references import parse_context_references
+
+    refs = parse_context_references("show @map:. and @map:src/")
+    assert len(refs) == 2
+    assert refs[0].kind == "map"
+    assert refs[0].target == ""
+    assert refs[1].kind == "map"
+    assert refs[1].target == "src/"
+
+
+def test_expand_map_reference_shows_symbols(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    src = "class Animal:\n    def __init__(self, name):\n        self.name = name\n    def speak(self, volume: str = 'normal') -> str:\n        return 'hi'\n\ndef helper(x: int, y: int = 0) -> int:\n    return x + y\n"
+    (repo / "example.py").write_text(src, encoding="utf-8")
+
+    result = preprocess_context_references(
+        "Review @map:.",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "class Animal" in result.message
+    assert "def __init__" in result.message
+    assert "def speak" in result.message
+    assert "def helper" in result.message
+    assert "volume" in result.message
+    assert not result.warnings
+
+
+def test_expand_map_skips_private_methods(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    src = "class Service:\n    def __init__(self):\n        pass\n    def _internal(self):\n        pass\n    def public(self):\n        pass\n"
+    (repo / "priv.py").write_text(src, encoding="utf-8")
+
+    result = preprocess_context_references(
+        "Review @map:.",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "class Service" in result.message
+    assert "def __init__" in result.message
+    assert "def public" in result.message
+    assert "_internal" not in result.message
+
+
+def test_expand_map_no_python_files(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    (repo / "README.md").write_text("# Hello", encoding="utf-8")
+
+    result = preprocess_context_references(
+        "Review @map:.",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "no Python files found" in result.message
+
+
+def test_expand_map_on_file_uses_parent(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    (repo / "code.py").write_text(
+        "def foo() -> int:\n    return 42\n",
+        encoding="utf-8",
+    )
+
+    # Point @map at a file, not a directory -- should use parent
+    result = preprocess_context_references(
+        "Review @map:code.py",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "def foo" in result.message
+
+
+def test_expand_map_nonexistent_path(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    result = preprocess_context_references(
+        "Review @map:nope/",
+        cwd=tmp_path,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "not found" in result.message
