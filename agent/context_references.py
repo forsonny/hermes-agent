@@ -293,8 +293,6 @@ def _expand_map_reference(
     dependencies.
     """
     import ast as _ast
-    import token as _token
-    import tokenize as _tokenize
 
     # Resolve the directory to scan
     raw_target = ref.target or "."
