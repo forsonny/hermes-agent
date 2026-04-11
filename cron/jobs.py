@@ -70,8 +70,8 @@ def _secure_dir(path: Path):
     """Set directory to owner-only access (0700). No-op on Windows."""
     try:
         os.chmod(path, 0o700)
-    except (OSError, NotImplementedError):
-        pass  # Windows or other platforms where chmod is not supported
+    except (OSError, NotImplementedError) as exc:
+        logger.debug("_secure_dir chmod failed for %s: %s", path, exc)
 
 
 def _secure_file(path: Path):
@@ -79,8 +79,8 @@ def _secure_file(path: Path):
     try:
         if path.exists():
             os.chmod(path, 0o600)
-    except (OSError, NotImplementedError):
-        pass
+    except (OSError, NotImplementedError) as exc:
+        logger.debug("_secure_file chmod failed for %s: %s", path, exc)
 
 
 def _cron_dir(base_dir: Optional[Path] = None) -> Path:

@@ -363,8 +363,8 @@ def cmd_mcp_remove(args):
         from tools.mcp_oauth import remove_oauth_tokens
         remove_oauth_tokens(name)
         _success("Cleaned up OAuth tokens")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("OAuth token cleanup for %s failed: %s", name, exc)
 
 
 # ─── hermes mcp list ──────────────────────────────────────────────────────────

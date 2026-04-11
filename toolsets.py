@@ -23,7 +23,10 @@ Usage:
     all_tools = resolve_toolset("full_stack")
 """
 
+import logging
 from typing import List, Dict, Any, Set, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # Shared tool list for CLI and all messaging platform toolsets.
@@ -444,8 +447,8 @@ def resolve_toolset(name: str, visited: Set[str] = None) -> List[str]:
             try:
                 from tools.registry import registry
                 return [e.name for e in registry._tools.values() if e.toolset == name]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("plugin toolset %s lookup failed: %s", name, exc)
         return []
 
     # Collect direct tools
@@ -517,8 +520,8 @@ def get_all_toolsets() -> Dict[str, Dict[str, Any]]:
                     "description": f"Plugin toolset: {ts_name}",
                     "tools": tools,
                 }
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("plugin toolset %s discovery failed: %s", ts_name, exc)
     return result
 
 
