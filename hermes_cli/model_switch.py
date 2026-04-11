@@ -244,21 +244,22 @@ def parse_model_flags(raw_args: str) -> tuple[str, str, bool]:
         "sonnet --provider anthropic"    -> ("sonnet", "anthropic", False)
         "--provider my-ollama"           -> ("", "my-ollama", False)
         "sonnet --provider anthropic --global" -> ("sonnet", "anthropic", True)
+
+    Token-based parsing avoids false matches on flags like ``--globalx``
+    or ``--global-setting`` that merely *contain* the ``--global`` prefix.
     """
     is_global = False
     explicit_provider = ""
 
-    # Extract --global
-    if "--global" in raw_args:
-        is_global = True
-        raw_args = raw_args.replace("--global", "").strip()
-
-    # Extract --provider <name>
+    # Tokenize first, then process flags by exact token match.
     parts = raw_args.split()
     i = 0
     filtered: list[str] = []
     while i < len(parts):
-        if parts[i] == "--provider" and i + 1 < len(parts):
+        if parts[i] == "--global":
+            is_global = True
+            i += 1
+        elif parts[i] == "--provider" and i + 1 < len(parts):
             explicit_provider = parts[i + 1]
             i += 2
         else:
