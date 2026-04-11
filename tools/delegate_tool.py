@@ -444,8 +444,8 @@ def _run_single_child(
                     if child_desc:
                         desc = (f"delegate_task: subagent {child_desc} "
                                 f"(iteration {child_iter}/{child_max})")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("heartbeat: could not read child activity: %s", exc)
             try:
                 touch(desc)
             except Exception:
@@ -788,8 +788,9 @@ def delegate_task(
                     result=entry.get("summary", "") or "",
                     child_session_id=getattr(children[entry["task_index"]][2], "session_id", "") if entry["task_index"] < len(children) else "",
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("memory provider on_delegation failed for task %s: %s",
+                              entry.get("task_index", "?"), exc)
 
     total_duration = round(time.monotonic() - overall_start, 2)
 
@@ -933,13 +934,14 @@ def _load_config() -> dict:
         cfg = CLI_CONFIG.get("delegation", {})
         if cfg:
             return cfg
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("delegate config: CLI_CONFIG not available: %s", exc)
     try:
         from hermes_cli.config import load_config
         full = load_config()
         return full.get("delegation", {})
-    except Exception:
+    except Exception as exc:
+        logger.warning("delegate config: could not load config file: %s", exc)
         return {}
 
 
