@@ -178,7 +178,7 @@ class TestMatrixTextBatching:
         adapter = _make_matrix_adapter()
         event = _make_event("hello world", Platform.MATRIX)
 
-        await adapter._enqueue_text_event(event)
+        adapter._enqueue_text_event(event)
 
         adapter.handle_message.assert_not_called()
         await asyncio.sleep(0.2)
@@ -190,9 +190,9 @@ class TestMatrixTextBatching:
     async def test_split_messages_aggregated(self):
         adapter = _make_matrix_adapter()
 
-        await adapter._enqueue_text_event(_make_event("first part", Platform.MATRIX))
+        adapter._enqueue_text_event(_make_event("first part", Platform.MATRIX))
         await asyncio.sleep(0.02)
-        await adapter._enqueue_text_event(_make_event("second part", Platform.MATRIX))
+        adapter._enqueue_text_event(_make_event("second part", Platform.MATRIX))
 
         adapter.handle_message.assert_not_called()
         await asyncio.sleep(0.2)
@@ -206,8 +206,8 @@ class TestMatrixTextBatching:
     async def test_different_rooms_not_merged(self):
         adapter = _make_matrix_adapter()
 
-        await adapter._enqueue_text_event(_make_event("room A", Platform.MATRIX, chat_id="!aaa:matrix.org"))
-        await adapter._enqueue_text_event(_make_event("room B", Platform.MATRIX, chat_id="!bbb:matrix.org"))
+        adapter._enqueue_text_event(_make_event("room A", Platform.MATRIX, chat_id="!aaa:matrix.org"))
+        adapter._enqueue_text_event(_make_event("room B", Platform.MATRIX, chat_id="!bbb:matrix.org"))
 
         await asyncio.sleep(0.2)
 
@@ -218,7 +218,7 @@ class TestMatrixTextBatching:
         """Chunks near the 4000-char limit should trigger longer delay."""
         adapter = _make_matrix_adapter()
         long_text = "x" * 3950
-        await adapter._enqueue_text_event(_make_event(long_text, Platform.MATRIX))
+        adapter._enqueue_text_event(_make_event(long_text, Platform.MATRIX))
 
         await asyncio.sleep(0.15)
         adapter.handle_message.assert_not_called()
@@ -229,7 +229,7 @@ class TestMatrixTextBatching:
     @pytest.mark.asyncio
     async def test_batch_cleans_up_after_flush(self):
         adapter = _make_matrix_adapter()
-        await adapter._enqueue_text_event(_make_event("test", Platform.MATRIX))
+        adapter._enqueue_text_event(_make_event("test", Platform.MATRIX))
         await asyncio.sleep(0.2)
         assert len(adapter._pending_text_batches) == 0
 

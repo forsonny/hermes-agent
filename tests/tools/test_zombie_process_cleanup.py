@@ -192,6 +192,8 @@ class TestGatewayCleanupWiring:
         import asyncio
         from unittest.mock import MagicMock, patch
 
+        from unittest.mock import AsyncMock
+
         runner = MagicMock()
         runner._running = True
         runner._running_agents = {}
@@ -201,6 +203,28 @@ class TestGatewayCleanupWiring:
         runner._pending_approvals = {}
         runner._shutdown_event = asyncio.Event()
         runner._exit_reason = None
+        runner._exit_code = 0
+        runner._stop_task = None
+        runner._restart_drain_timeout = 0
+        runner._restart_requested = False
+        runner._draining = False
+        runner._restart_detached = False
+        runner._restart_via_service = False
+
+        async def _drain(timeout):
+            return (dict(runner._running_agents), False)
+        runner._drain_active_agents = AsyncMock(side_effect=_drain)
+        runner._launch_detached_restart_command = AsyncMock()
+
+        runner._running_agent_count = lambda: len(runner._running_agents)
+        runner._interrupt_running_agents = lambda msg: None
+        runner._update_runtime_status = lambda *a, **kw: None
+
+        def _finalize(active_agents):
+            for agent in active_agents.values():
+                if hasattr(agent, "close"):
+                    agent.close()
+        runner._finalize_shutdown_agents = _finalize
 
         mock_agent_1 = MagicMock()
         mock_agent_2 = MagicMock()
