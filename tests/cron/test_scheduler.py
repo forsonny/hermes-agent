@@ -966,8 +966,13 @@ class TestRunJobSkillBacked:
         assert "Combine the results." in prompt_arg
 
 
+@patch("cron.scheduler.fcntl", None)
 class TestSilentDelivery:
-    """Verify that [SILENT] responses suppress delivery while still saving output."""
+    """Verify that [SILENT] responses suppress delivery while still saving output.
+
+    fcntl is patched to None so tick()'s file locking becomes a no-op,
+    preventing xdist worker lock contention.
+    """
 
     def _make_job(self):
         return {
@@ -1126,8 +1131,13 @@ class TestBuildJobPromptMissingSkill:
         assert "go" in result
 
 
+@patch("cron.scheduler.fcntl", None)
 class TestTickAdvanceBeforeRun:
-    """Verify that tick() calls advance_next_run before run_job for crash safety."""
+    """Verify that tick() calls advance_next_run before run_job for crash safety.
+
+    fcntl is patched to None so tick()'s file locking becomes a no-op,
+    preventing xdist worker lock contention.
+    """
 
     def test_advance_called_before_run_job(self, tmp_path):
         """advance_next_run must be called before run_job to prevent crash-loop re-fires."""

@@ -7,9 +7,6 @@ resolution in list_authenticated_providers() Section 2 must bridge this gap.
 Covers: #5223, #6492
 """
 
-import json
-"""
-
 import os
 from unittest.mock import patch
 
@@ -37,7 +34,6 @@ def test_copilot_uses_hermes_slug():
 
 @patch.dict(os.environ, {"COPILOT_GITHUB_TOKEN": "fake-ghu"}, clear=False)
 def test_copilot_no_duplicate_entries():
-    """Copilot must appear only once — not as both 'copilot' (section 1) and 'github-copilot' (section 2)."""
     """Copilot must appear only once -- not as both 'copilot' and 'github-copilot'."""
     providers = list_authenticated_providers(current_provider="copilot")
 

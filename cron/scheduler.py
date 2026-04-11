@@ -17,14 +17,15 @@ import subprocess
 import sys
 
 # fcntl is Unix-only; on Windows use msvcrt for file locking
+fcntl = None
+msvcrt = None
 try:
     import fcntl
 except ImportError:
-    fcntl = None
     try:
         import msvcrt
     except ImportError:
-        msvcrt = None
+        pass
 from pathlib import Path
 from typing import Optional
 

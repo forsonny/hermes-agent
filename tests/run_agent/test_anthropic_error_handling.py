@@ -176,6 +176,7 @@ def _run_with_agent(monkeypatch, agent_cls):
     runner.hooks.emit = AsyncMock()
     runner.hooks.loaded_hooks = []
     runner._session_db = None
+    runner._session_model_overrides = {}
 
     source = SessionSource(
         platform=Platform.LOCAL,
@@ -311,6 +312,7 @@ def test_401_credential_refresh_recovers(monkeypatch):
     runner.hooks.emit = AsyncMock()
     runner.hooks.loaded_hooks = []
     runner._session_db = None
+    runner._session_model_overrides = {}
 
     source = SessionSource(
         platform=Platform.LOCAL, chat_id="cli", chat_name="CLI",
@@ -384,6 +386,7 @@ def test_401_refresh_fails_is_non_retryable(monkeypatch):
     runner.hooks.emit = AsyncMock()
     runner.hooks.loaded_hooks = []
     runner._session_db = None
+    runner._session_model_overrides = {}
 
     source = SessionSource(
         platform=Platform.LOCAL, chat_id="cli", chat_name="CLI",
@@ -472,6 +475,7 @@ def test_prompt_too_long_triggers_compression(monkeypatch):
     runner.hooks.emit = AsyncMock()
     runner.hooks.loaded_hooks = []
     runner._session_db = None
+    runner._session_model_overrides = {}
 
     source = SessionSource(
         platform=Platform.LOCAL, chat_id="cli", chat_name="CLI",
