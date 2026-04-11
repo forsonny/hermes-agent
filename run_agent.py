@@ -699,7 +699,7 @@ class AIAgent:
             if self.provider not in _AGGREGATOR_PROVIDERS:
                 self.model = normalize_model_for_provider(self.model, self.provider)
         except Exception:
-            pass
+            logger.debug("Model normalization failed for %s/%s", self.provider, self.model)
 
         # Direct OpenAI sessions use the Responses API path.  GPT-5.x tool
         # calls with reasoning are rejected on /v1/chat/completions, and
@@ -1156,12 +1156,12 @@ class AIAgent:
                                 _cfg.setdefault("memory", {})["provider"] = "honcho"
                                 _sc(_cfg)
                             except Exception:
-                                pass
+                                logger.debug("Failed to persist Honcho auto-migration")
                             if not self.quiet_mode:
                                 print("  ✓ Auto-migrated Honcho to memory provider plugin.")
                                 print("    Your config and data are preserved.\n")
                     except Exception:
-                        pass
+                        logger.debug("Honcho memory provider auto-detection failed")
 
                 if _mem_provider_name:
                     from agent.memory_manager import MemoryManager as _MemoryManager
@@ -1188,7 +1188,7 @@ class AIAgent:
                             _init_kwargs["agent_identity"] = _profile
                             _init_kwargs["agent_workspace"] = "hermes"
                         except Exception:
-                            pass
+                            logger.debug("Failed to resolve active profile for memory provider")
                         self._memory_manager.initialize_all(**_init_kwargs)
                         logger.info("Memory provider '%s' activated", _mem_provider_name)
                     else:
@@ -1213,7 +1213,7 @@ class AIAgent:
             skills_config = _agent_cfg.get("skills", {})
             self._skill_nudge_interval = int(skills_config.get("creation_nudge_interval", 10))
         except Exception:
-            pass
+            logger.debug("Failed to parse skills config nudge interval")
 
         # Tool-use enforcement config: "auto" (default — matches hardcoded
         # model list), true (always), false (never), or list of substrings.

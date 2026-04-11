@@ -457,7 +457,7 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
             stdout = redact_sensitive_text(stdout)
             stderr = redact_sensitive_text(stderr)
         except Exception:
-            pass
+            logger.warning("Failed to redact secrets in script output for '%s'", path)
 
         if result.returncode != 0:
             parts = [f"Script exited with code {result.returncode}"]
