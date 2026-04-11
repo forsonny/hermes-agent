@@ -804,6 +804,46 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
         except (json.JSONDecodeError, TypeError, AttributeError):
             logger.debug("Could not parse memory result as JSON for capacity check")
 
+    # Delegate-specific: detect partial/total subagent failures
+    if tool_name == "delegate_task":
+        try:
+            data = json.loads(result)
+            # Top-level error (depth limit, config error, etc.)
+            if data.get("error"):
+                return True, " [error]"
+            results = data.get("results", [])
+            if results:
+                failed = sum(1 for r in results if r.get("error") or r.get("status") in ("error", "failed"))
+                if failed > 0:
+                    return True, f" [{failed}/{len(results)} failed]"
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            logger.debug("Could not parse delegate_task result for failure detection")
+        return False, ""
+
+    # Process-specific: detect killed/timeout states
+    if tool_name == "process":
+        try:
+            data = json.loads(result)
+            status = data.get("status", "")
+            if status in ("killed", "timeout"):
+                return True, f" [{status}]"
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            logger.debug("Could not parse process result for failure detection")
+        return False, ""
+
+    # Execute_code specific: detect runtime errors in sandbox output
+    if tool_name == "execute_code":
+        try:
+            data = json.loads(result)
+            if data.get("exit_code", 0) != 0:
+                err = data.get("error", "")
+                if "timeout" in err.lower() or "timed out" in err.lower():
+                    return True, " [timeout]"
+                return True, f" [exit {data.get('exit_code')}]"
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            logger.debug("Could not parse execute_code result for failure detection")
+        return False, ""
+
     # Generic heuristic for non-terminal tools
     lower = result[:500].lower()
     if '"error"' in lower or '"failed"' in lower or result.startswith("Error"):
