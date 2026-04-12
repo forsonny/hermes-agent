@@ -278,7 +278,11 @@ def test_explicit_reset_timestamp_overrides_default_429_ttl(tmp_path, monkeypatc
 
     from agent.credential_pool import load_pool
 
-    pool = load_pool("openai-codex")
+    # Mock seeding to prevent real Codex tokens from being discovered
+    # from the environment's auth.json / ~/.codex/auth.json
+    from unittest.mock import patch as _patch
+    with _patch("agent.credential_pool._seed_from_singletons", return_value=(False, set())),          _patch("agent.credential_pool._seed_from_env", return_value=(False, set())):
+        pool = load_pool("openai-codex")
     assert pool.has_available() is False
     assert pool.select() is None
 
