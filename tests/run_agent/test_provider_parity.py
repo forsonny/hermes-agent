@@ -48,6 +48,8 @@ def _make_agent(monkeypatch, provider, api_mode="chat_completions", base_url="ht
     monkeypatch.setattr("run_agent.get_tool_definitions", lambda **kw: _tool_defs("web_search", "terminal"))
     monkeypatch.setattr("run_agent.check_toolset_requirements", lambda: {})
     monkeypatch.setattr("run_agent.OpenAI", _FakeOpenAI)
+    # Bypass the 64K minimum context length check for test models
+    monkeypatch.setattr("agent.model_metadata.MINIMUM_CONTEXT_LENGTH", 0)
     return AIAgent(
         api_key="test-key",
         base_url=base_url,

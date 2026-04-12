@@ -47,7 +47,7 @@ class _FakeClient:
 def test_tool_call_validation_accepts_dict_arguments(monkeypatch):
     from run_agent import AIAgent
 
-    monkeypatch.setattr("run_agent.OpenAI", lambda **kwargs: _FakeClient())
+    monkeypatch.setattr("run_agent.OpenAI", lambda **kwargs: _shared_client)
     monkeypatch.setattr(
         "run_agent.get_tool_definitions",
         lambda *args, **kwargs: [{"function": {"name": "read_file"}}],
@@ -57,6 +57,7 @@ def test_tool_call_validation_accepts_dict_arguments(monkeypatch):
         lambda name, args, task_id=None, **kwargs: json.dumps({"ok": True, "args": args}),
     )
 
+    _shared_client = _FakeClient()
     agent = AIAgent(
         model="test-model",
         api_key="test-key",

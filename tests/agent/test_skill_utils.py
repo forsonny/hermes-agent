@@ -187,13 +187,15 @@ class TestNormalizeStringSet:
 
 class TestGetDisabledSkillNames:
     def test_no_config_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         assert get_disabled_skill_names() == set()
 
     def test_global_disabled(self, tmp_path, monkeypatch):
         config = tmp_path / "config.yaml"
         config.write_text("skills:\n  disabled:\n    - skill_a\n    - skill_b\n")
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         monkeypatch.delenv("HERMES_PLATFORM", raising=False)
         monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
         assert get_disabled_skill_names() == {"skill_a", "skill_b"}
@@ -203,7 +205,8 @@ class TestGetDisabledSkillNames:
         config.write_text(
             "skills:\n  disabled:\n    - global_skill\n  platform_disabled:\n    telegram:\n      - tg_skill\n"
         )
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         monkeypatch.setenv("HERMES_PLATFORM", "telegram")
         assert get_disabled_skill_names() == {"tg_skill"}
 
@@ -212,13 +215,15 @@ class TestGetDisabledSkillNames:
         config.write_text(
             "skills:\n  platform_disabled:\n    discord:\n      - disc_skill\n"
         )
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         assert get_disabled_skill_names("discord") == {"disc_skill"}
 
     def test_malformed_config_returns_empty(self, tmp_path, monkeypatch):
         config = tmp_path / "config.yaml"
         config.write_text("{{invalid yaml")
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         monkeypatch.delenv("HERMES_PLATFORM", raising=False)
         monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
         # Should not crash, return empty
@@ -230,13 +235,15 @@ class TestGetDisabledSkillNames:
 
 class TestGetExternalSkillsDirs:
     def test_no_config(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         assert get_external_skills_dirs() == []
 
     def test_no_external_dirs_key(self, tmp_path, monkeypatch):
         config = tmp_path / "config.yaml"
         config.write_text("skills:\n  disabled: []\n")
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         assert get_external_skills_dirs() == []
 
     def test_valid_dirs(self, tmp_path, monkeypatch):
@@ -244,7 +251,8 @@ class TestGetExternalSkillsDirs:
         ext_dir.mkdir()
         config = tmp_path / "config.yaml"
         config.write_text("skills:\n  external_dirs:\n    - " + str(ext_dir) + "\n")
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         result = get_external_skills_dirs()
         assert len(result) == 1
         assert result[0] == ext_dir.resolve()
@@ -252,7 +260,8 @@ class TestGetExternalSkillsDirs:
     def test_nonexistent_dir_skipped(self, tmp_path, monkeypatch):
         config = tmp_path / "config.yaml"
         config.write_text("skills:\n  external_dirs:\n    - " + str(tmp_path) + "/nonexistent\n")
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         assert get_external_skills_dirs() == []
 
     def test_duplicates_deduplicated(self, tmp_path, monkeypatch):
@@ -262,7 +271,8 @@ class TestGetExternalSkillsDirs:
         config.write_text(
             "skills:\n  external_dirs:\n    - " + str(ext_dir) + "\n    - " + str(ext_dir) + "\n"
         )
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         assert len(get_external_skills_dirs()) == 1
 
     def test_local_skills_dir_excluded(self, tmp_path, monkeypatch):
@@ -270,7 +280,8 @@ class TestGetExternalSkillsDirs:
         local_skills.mkdir()
         config = tmp_path / "config.yaml"
         config.write_text("skills:\n  external_dirs:\n    - " + str(local_skills) + "\n")
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         # local skills dir should be skipped
         assert get_external_skills_dirs() == []
 
@@ -279,7 +290,8 @@ class TestGetExternalSkillsDirs:
         ext_dir.mkdir()
         config = tmp_path / "config.yaml"
         config.write_text("skills:\n  external_dirs: " + str(ext_dir) + "\n")
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         assert len(get_external_skills_dirs()) == 1
 
 
@@ -288,7 +300,8 @@ class TestGetExternalSkillsDirs:
 
 class TestGetAllSkillsDirs:
     def test_local_always_first(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         monkeypatch.setattr(su, "get_external_skills_dirs", lambda: [])
         dirs = get_all_skills_dirs()
         assert dirs[0] == tmp_path / "skills"
@@ -296,7 +309,8 @@ class TestGetAllSkillsDirs:
     def test_external_appended(self, tmp_path, monkeypatch):
         ext = tmp_path / "ext"
         ext.mkdir()
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         monkeypatch.setattr(su, "get_external_skills_dirs", lambda: [ext])
         dirs = get_all_skills_dirs()
         assert len(dirs) == 2
@@ -504,7 +518,8 @@ class TestResolveDotpath:
 
 class TestResolveSkillConfigValues:
     def test_no_config_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         config_vars = [{"key": "test.path", "description": "Test", "default": "/default"}]
         result = resolve_skill_config_values(config_vars)
         assert result["test.path"] == "/default"
@@ -512,7 +527,8 @@ class TestResolveSkillConfigValues:
     def test_value_from_config(self, tmp_path, monkeypatch):
         config = tmp_path / "config.yaml"
         config.write_text("skills:\n  config:\n    wiki:\n      path: /custom/wiki\n")
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         config_vars = [
             {"key": "wiki.path", "description": "Wiki path", "default": "~/wiki"}
         ]
@@ -522,7 +538,8 @@ class TestResolveSkillConfigValues:
     def test_fallback_to_default(self, tmp_path, monkeypatch):
         config = tmp_path / "config.yaml"
         config.write_text("skills:\n  config:\n    other: value\n")
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         config_vars = [
             {"key": "missing.key", "description": "Missing", "default": "fallback"}
         ]
@@ -532,7 +549,8 @@ class TestResolveSkillConfigValues:
     def test_empty_string_uses_default(self, tmp_path, monkeypatch):
         config = tmp_path / "config.yaml"
         config.write_text("skills:\n  config:\n    empty_key: ''\n")
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         config_vars = [
             {"key": "empty_key", "description": "Empty", "default": "default_val"}
         ]
@@ -635,7 +653,8 @@ class TestDiscoverAllSkillConfigVars:
     def test_empty_skills_dir(self, tmp_path, monkeypatch):
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         monkeypatch.setattr(su, "get_disabled_skill_names", lambda: set())
         monkeypatch.setattr(su, "get_all_skills_dirs", lambda: [skills_dir])
         assert discover_all_skill_config_vars() == []
@@ -656,7 +675,8 @@ class TestDiscoverAllSkillConfigVars:
             "---\n"
             "Body"
         )
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         monkeypatch.setattr(su, "get_disabled_skill_names", lambda: set())
         monkeypatch.setattr(su, "get_all_skills_dirs", lambda: [skills_dir])
         result = discover_all_skill_config_vars()
@@ -679,7 +699,8 @@ class TestDiscoverAllSkillConfigVars:
             "---\n"
             "Body"
         )
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         monkeypatch.setattr(su, "get_disabled_skill_names", lambda: {"disabled-skill"})
         monkeypatch.setattr(su, "get_all_skills_dirs", lambda: [skills_dir])
         assert discover_all_skill_config_vars() == []
@@ -700,7 +721,8 @@ class TestDiscoverAllSkillConfigVars:
                 "---\n"
                 "body"
             )
-        monkeypatch.setattr(su, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(su, "get_config_path", lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(su, "get_skills_dir", lambda: tmp_path / "skills")
         monkeypatch.setattr(su, "get_disabled_skill_names", lambda: set())
         monkeypatch.setattr(su, "get_all_skills_dirs", lambda: [skills_dir])
         result = discover_all_skill_config_vars()
