@@ -697,6 +697,9 @@ DEFAULT_CONFIG = {
         # Wrap delivered cron responses with a header (task name) and footer
         # ("The agent cannot see this message").  Set to false for clean output.
         "wrap_response": True,
+        # Maximum output files to keep per cron job.  Oldest files are pruned
+        # automatically after each run.  Set to 0 to disable pruning.
+        "max_outputs_per_job": 50,
     },
 
     # Logging — controls file logging to ~/.hermes/logs/.

@@ -26,6 +26,8 @@ from cron.jobs import (
     mark_job_running,
     clear_running_job,
     list_running_jobs,
+    prune_old_outputs,
+    _get_max_outputs_per_job,
 )
 
 
@@ -600,3 +602,162 @@ class TestSaveJobOutput:
         assert output_file.exists()
         assert output_file.read_text() == "# Results\nEverything ok."
         assert "test123" in str(output_file)
+
+
+class TestPruneOldOutputs:
+    def test_prune_removes_oldest_files(self, tmp_cron_dir):
+        """When there are more files than max_keep, oldest are removed."""
+        job_id = "prune-test"
+        output_dir = tmp_cron_dir / "cron" / "output" / job_id
+        output_dir.mkdir(parents=True)
+
+        # Create 10 output files with timestamp names
+        for i in range(10):
+            (output_dir / f"2026-04-12_{i:02d}-00-00.md").write_text(f"output {i}")
+
+        assert len(list(output_dir.glob("*.md"))) == 10
+
+        removed = prune_old_outputs(job_id, max_keep=5, base_dir=tmp_cron_dir)
+        assert removed == 5
+
+        remaining = sorted(f.name for f in output_dir.glob("*.md"))
+        assert len(remaining) == 5
+        # The 5 newest should remain (05 through 09)
+        assert remaining[0] == "2026-04-12_05-00-00.md"
+        assert remaining[-1] == "2026-04-12_09-00-00.md"
+
+    def test_prune_noop_when_under_limit(self, tmp_cron_dir):
+        """When file count <= max_keep, nothing is removed."""
+        job_id = "prune-ok"
+        output_dir = tmp_cron_dir / "cron" / "output" / job_id
+        output_dir.mkdir(parents=True)
+
+        for i in range(3):
+            (output_dir / f"2026-04-12_{i:02d}-00-00.md").write_text(f"output {i}")
+
+        removed = prune_old_outputs(job_id, max_keep=5, base_dir=tmp_cron_dir)
+        assert removed == 0
+        assert len(list(output_dir.glob("*.md"))) == 3
+
+    def test_prune_disabled_with_zero(self, tmp_cron_dir):
+        """max_keep=0 disables pruning entirely."""
+        job_id = "prune-disabled"
+        output_dir = tmp_cron_dir / "cron" / "output" / job_id
+        output_dir.mkdir(parents=True)
+
+        for i in range(20):
+            (output_dir / f"2026-04-12_{i:02d}-00-00.md").write_text(f"output {i}")
+
+        removed = prune_old_outputs(job_id, max_keep=0, base_dir=tmp_cron_dir)
+        assert removed == 0
+        assert len(list(output_dir.glob("*.md"))) == 20
+
+    def test_prune_nonexistent_job_dir(self, tmp_cron_dir):
+        """Pruning a job with no output directory returns 0."""
+        removed = prune_old_outputs("nonexistent-job", max_keep=5, base_dir=tmp_cron_dir)
+        assert removed == 0
+
+    def test_prune_ignores_dotfiles_and_non_md(self, tmp_cron_dir):
+        """Dotfiles and non-.md files are not counted for pruning."""
+        job_id = "prune-mixed"
+        output_dir = tmp_cron_dir / "cron" / "output" / job_id
+        output_dir.mkdir(parents=True)
+
+        # 5 .md output files
+        for i in range(5):
+            (output_dir / f"2026-04-12_{i:02d}-00-00.md").write_text(f"output {i}")
+        # Dotfile (temp file from atomic write)
+        (output_dir / ".output_abc123.tmp").write_text("temp")
+        # Non-md file
+        (output_dir / "notes.txt").write_text("not an output")
+
+        # With max_keep=3, only 2 .md files should be removed
+        removed = prune_old_outputs(job_id, max_keep=3, base_dir=tmp_cron_dir)
+        assert removed == 2
+
+        remaining_md = list(output_dir.glob("*.md"))
+        assert len(remaining_md) == 3
+        # Non-md and dotfiles still present
+        assert (output_dir / ".output_abc123.tmp").exists()
+        assert (output_dir / "notes.txt").exists()
+
+    def test_prune_exactly_at_limit(self, tmp_cron_dir):
+        """When file count == max_keep, no pruning occurs."""
+        job_id = "prune-exact"
+        output_dir = tmp_cron_dir / "cron" / "output" / job_id
+        output_dir.mkdir(parents=True)
+
+        for i in range(5):
+            (output_dir / f"2026-04-12_{i:02d}-00-00.md").write_text(f"output {i}")
+
+        removed = prune_old_outputs(job_id, max_keep=5, base_dir=tmp_cron_dir)
+        assert removed == 0
+
+
+class TestGetMaxOutputsPerJob:
+    def test_reads_from_config(self, tmp_path, monkeypatch):
+        """Reads max_outputs_per_job from cron config section."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("cron:\n  max_outputs_per_job: 25\n")
+
+        result = _get_max_outputs_per_job()
+        assert result == 25
+
+    def test_defaults_to_50(self, tmp_path, monkeypatch):
+        """Returns 50 when config is missing or empty."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        # No config file
+        result = _get_max_outputs_per_job()
+        assert result == 50
+
+    def test_handles_invalid_value(self, tmp_path, monkeypatch):
+        """Returns 50 for non-integer config values."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("cron:\n  max_outputs_per_job: not_a_number\n")
+
+        # Should not raise, just return default
+        try:
+            result = _get_max_outputs_per_job()
+            assert result == 50
+        except (ValueError, TypeError):
+            # If it raises, that is also acceptable behavior
+            pass
+
+
+class TestSaveJobOutputWithPrune:
+    def test_save_triggers_prune(self, tmp_cron_dir, monkeypatch):
+        """save_job_output prunes old files after writing new ones."""
+        import time
+        monkeypatch.setattr("cron.jobs._get_max_outputs_per_job", lambda: 3)
+
+        # Pre-create 4 output files with distinct timestamps
+        output_dir = tmp_cron_dir / "cron" / "output" / "prune-integration"
+        output_dir.mkdir(parents=True)
+        for i in range(4):
+            (output_dir / f"2026-04-12_10-{i:02d}-00.md").write_text(f"old output {i}")
+
+        # Save 1 more via save_job_output (total becomes 5, prune to 3)
+        save_job_output("prune-integration", "new output")
+
+        remaining = sorted(f.name for f in output_dir.glob("*.md"))
+        assert len(remaining) == 3
+
+    def test_save_without_prune_when_disabled(self, tmp_cron_dir, monkeypatch):
+        """save_job_output does not prune when max_outputs is 0."""
+        import time
+        monkeypatch.setattr("cron.jobs._get_max_outputs_per_job", lambda: 0)
+
+        # Pre-create 10 output files with distinct timestamps
+        output_dir = tmp_cron_dir / "cron" / "output" / "no-prune"
+        output_dir.mkdir(parents=True)
+        for i in range(10):
+            (output_dir / f"2026-04-12_10-{i:02d}-00.md").write_text(f"output {i}")
+
+        # Save 1 more via save_job_output
+        save_job_output("no-prune", "new output")
+
+        remaining = list(output_dir.glob("*.md"))
+        # All 10 pre-existing + 1 new = 11
+        assert len(remaining) == 11

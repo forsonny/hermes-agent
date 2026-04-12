@@ -107,6 +107,18 @@ def ensure_dirs(base_dir: Optional[Path] = None):
     _secure_dir(running_dir)
 
 
+def _get_max_outputs_per_job() -> int:
+    """Read cron.max_outputs_per_job from config, defaulting to 50."""
+    try:
+        from hermes_cli.config import load_config
+        cfg = load_config()
+        cron_cfg = cfg.get("cron", {}) if isinstance(cfg, dict) else {}
+        val = cron_cfg.get("max_outputs_per_job", 50)
+        return int(val) if val is not None else 50
+    except Exception:
+        return 50
+
+
 def _pid_is_alive(pid: Optional[Any]) -> bool:
     try:
         pid_int = int(pid)
@@ -842,6 +854,54 @@ def get_due_jobs() -> List[Dict[str, Any]]:
     return due
 
 
+
+def prune_old_outputs(job_id: str, max_keep: int = 0, *, base_dir: Optional[Path] = None):
+    """Remove old output files for a job, keeping only the most recent *max_keep*.
+
+    Files are sorted by name (which embeds timestamps), so lexicographic order
+    matches chronological order.  If *max_keep* is 0, no pruning is performed.
+
+    Returns the number of files removed.
+    """
+    if max_keep <= 0:
+        return 0
+
+    output_root = _cron_dir(base_dir) / "output"
+    job_dir = output_root / job_id
+    if not job_dir.is_dir():
+        return 0
+
+    try:
+        files = sorted(
+            [f for f in job_dir.iterdir() if f.is_file() and f.suffix == ".md" and not f.name.startswith(".")],
+            key=lambda f: f.name,
+        )
+    except OSError:
+        logger.debug("Failed to list output files for job %s", job_id)
+        return 0
+
+    if len(files) <= max_keep:
+        return 0
+
+    to_remove = files[: len(files) - max_keep]
+    removed = 0
+    for f in to_remove:
+        try:
+            f.unlink()
+            removed += 1
+        except OSError as exc:
+            logger.debug("Failed to remove old output %s: %s", f, exc)
+
+    if removed:
+        logger.info(
+            "Pruned %d old output(s) for job %s (max_keep=%d)",
+            removed,
+            job_id,
+            max_keep,
+        )
+    return removed
+
+
 def save_job_output(job_id: str, output: str):
     """Save job output to file."""
     ensure_dirs()
@@ -867,4 +927,9 @@ def save_job_output(job_id: str, output: str):
             pass
         raise
     
+    # Prune old output files based on config
+    _max_outputs = _get_max_outputs_per_job()
+    if _max_outputs > 0:
+        prune_old_outputs(job_id, _max_outputs)
+
     return output_file
