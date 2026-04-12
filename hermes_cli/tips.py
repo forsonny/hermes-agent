@@ -1,7 +1,7 @@
 """Random tips shown at CLI session start to help users discover features."""
 
 import random
-from typing import Optional
+
 
 # ---------------------------------------------------------------------------
 # Tip corpus — one-liners covering slash commands, CLI flags, config,
