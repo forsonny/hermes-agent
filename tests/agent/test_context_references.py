@@ -413,3 +413,136 @@ def test_expand_map_nonexistent_path(tmp_path):
 
     assert result.expanded
     assert "not found" in result.message
+
+
+def test_parse_grep_reference():
+    from agent.context_references import parse_context_references
+
+    refs = parse_context_references('find @grep:"TODO|FIXME" in the code')
+    assert len(refs) == 1
+    assert refs[0].kind == "grep"
+    assert "TODO" in refs[0].target
+
+
+def test_parse_grep_reference_unquoted():
+    from agent.context_references import parse_context_references
+
+    refs = parse_context_references("show @grep:TODO")
+    assert len(refs) == 1
+    assert refs[0].kind == "grep"
+    assert "TODO" in refs[0].target
+
+
+def test_parse_grep_reference_with_path():
+    from agent.context_references import parse_context_references
+
+    refs = parse_context_references('find @grep:"class Foo:src/" in code')
+    assert len(refs) == 1
+    assert refs[0].kind == "grep"
+    assert "class Foo" in refs[0].target or "Foo" in refs[0].target
+
+
+def test_expand_grep_finds_matches(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    (repo / "code.py").write_text(
+        "def hello():\n    # TODO: fix this\n    pass\n\ndef world():\n    # FIXME: also broken\n    pass\n",
+        encoding="utf-8",
+    )
+
+    result = preprocess_context_references(
+        'Find @grep:"TODO|FIXME"',
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "TODO" in result.message
+    assert "FIXME" in result.message
+    assert not result.warnings
+
+
+def test_expand_grep_no_matches(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    (repo / "code.py").write_text("print('hello')\n", encoding="utf-8")
+
+    result = preprocess_context_references(
+        'Find @grep:"NONEXISTENT_PATTERN_XYZ"',
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "no matches" in result.message
+
+
+def test_expand_grep_with_path_prefix(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    src_dir = repo / "src"
+    src_dir.mkdir()
+    (src_dir / "main.py").write_text(
+        "TARGET_MARKER_UNIQUE = True\n",
+        encoding="utf-8",
+    )
+    (repo / "other.py").write_text(
+        "TARGET_MARKER_UNIQUE = False\n",
+        encoding="utf-8",
+    )
+
+    result = preprocess_context_references(
+        'Find @grep:"TARGET_MARKER_UNIQUE:src"',
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "TARGET_MARKER_UNIQUE" in result.message
+
+
+def test_expand_grep_empty_pattern(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    # @grep: without a target does not parse as a reference (regex requires
+    # at least one char after the colon), so it stays as literal text.
+    repo = tmp_path / "project"
+    repo.mkdir()
+    (repo / "code.py").write_text("x = 1\n", encoding="utf-8")
+
+    result = preprocess_context_references(
+        "Find @grep:",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    # Not expanded -- stays as literal "@grep:" in the message
+    assert not result.expanded
+    assert "@grep:" in result.message
+
+
+def test_expand_grep_skips_venv_dirs(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    venv = repo / "venv"
+    venv.mkdir()
+    (venv / "lib.py").write_text("SKIP_MARKER_UNIQUE = True\n", encoding="utf-8")
+    (repo / "main.py").write_text("FIND_MARKER_UNIQUE = True\n", encoding="utf-8")
+
+    result = preprocess_context_references(
+        'Find @grep:"_MARKER_UNIQUE"',
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "FIND_MARKER_UNIQUE" in result.message
+    assert "SKIP_MARKER_UNIQUE" not in result.message

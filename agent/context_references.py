@@ -15,7 +15,7 @@ from agent.model_metadata import estimate_tokens_rough
 
 _QUOTED_REFERENCE_VALUE = r'(?:`[^`\n]+`|"[^"\n]+"|\'[^\'\n]+\')'
 REFERENCE_PATTERN = re.compile(
-    rf"(?<![\w/])@(?:(?P<simple>diff|staged)\b|(?P<kind>file|folder|git|map|url):(?P<value>{_QUOTED_REFERENCE_VALUE}(?::\d+(?:-\d+)?)?|\S+))"
+    rf"(?<![\w/])@(?:(?P<simple>diff|staged)\b|(?P<kind>file|folder|git|grep|map|url):(?P<value>{_QUOTED_REFERENCE_VALUE}(?::\d+(?:-\d+)?)?|\S+))"
 )
 TRAILING_PUNCTUATION = ",.;!?"
 _SENSITIVE_HOME_DIRS = (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".config/gh")
@@ -229,6 +229,8 @@ async def _expand_reference(
             return None, f"🌐 {ref.raw} ({estimate_tokens_rough(content)} tokens)\n{content}"
         if ref.kind == "map":
             return _expand_map_reference(ref, cwd, allowed_root=allowed_root)
+        if ref.kind == "grep":
+            return _expand_grep_reference(ref, cwd, allowed_root=allowed_root)
     except Exception as exc:
         return f"{ref.raw}: {exc}", None
 
@@ -418,6 +420,122 @@ def _format_class_sig(node: "ast.ClassDef") -> str:
         return ""
     bases = [_ast.unparse(b) for b in node.bases]
     return f"({', '.join(bases)})"
+
+
+
+def _expand_grep_reference(
+    ref: ContextReference,
+    cwd: Path,
+    *,
+    allowed_root: Path | None = None,
+) -> tuple[str | None, str | None]:
+    """Search files for a regex pattern using ``grep`` and return matching lines.
+
+    The target is a pattern (required) optionally followed by ``:`` and a path
+    prefix, e.g. ``@grep:"TODO|FIXME"`` or ``@grep:"class Foo:src/"``.
+    Results are capped at 200 matches across a maximum of 50 files.
+    """
+    # Parse target: "pattern" or "pattern:path_prefix"
+    raw_target = ref.target or ""
+    if not raw_target:
+        return f"{ref.raw}: no search pattern provided", None
+
+    # Split on the last colon that's followed by a path-like string
+    # Heuristic: if there's a colon and the part after looks like a path, use it
+    path_prefix = "."
+    pattern = raw_target
+    if ":" in raw_target:
+        parts = raw_target.rsplit(":", 1)
+        candidate_path = parts[1].strip()
+        candidate_pattern = parts[0].strip()
+        if candidate_path and candidate_pattern:
+            test_path = Path(os.path.expanduser(candidate_path))
+            if not test_path.is_absolute():
+                test_path = cwd / test_path
+            if test_path.exists():
+                pattern = candidate_pattern
+                path_prefix = candidate_path
+
+    # Resolve and validate the search path
+    search_path = _resolve_path(cwd, path_prefix, allowed_root=allowed_root)
+    _ensure_reference_path_allowed(search_path)
+    if not search_path.exists():
+        return f"{ref.raw}: path not found: {path_prefix}", None
+
+    # Build grep command with extended regex
+    skip_dirs = [
+        "venv", ".venv", "__pycache__", ".git", "node_modules",
+        ".tox", ".mypy_cache", ".pytest_cache", "dist", "build",
+        ".hg", ".svn", "vendor", ".cargo", "target",
+    ]
+    grep_args = [
+        "grep", "-rn", "-E", "--binary-files=without-match",
+    ]
+    for d in skip_dirs:
+        grep_args.append("--exclude-dir=" + d)
+    grep_args.extend([
+        "--max-count=50",
+        "--color=never",
+        "--",
+        pattern,
+        str(search_path),
+    ])
+
+    try:
+        result = subprocess.run(
+            grep_args,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return f"{ref.raw}: grep timed out (15s)", None
+    except FileNotFoundError:
+        return f"{ref.raw}: grep not available on this system", None
+
+    # grep returns 1 when no matches found
+    if result.returncode not in (0, 1):
+        stderr = (result.stderr or "").strip()
+        if "unrecognized option" in stderr or "invalid" in stderr.lower():
+            # Fall back to basic grep without --exclude-dir (e.g. BusyBox grep)
+            grep_args_fallback = [
+                "grep", "-rn", "-E", "--binary-files=without-match",
+                "--max-count=50", "--color=never",
+                "--", pattern, str(search_path),
+            ]
+            try:
+                result = subprocess.run(
+                    grep_args_fallback,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+            except subprocess.TimeoutExpired:
+                return f"{ref.raw}: grep timed out (15s)", None
+            except FileNotFoundError:
+                return f"{ref.raw}: grep not available on this system", None
+        else:
+            return f"{ref.raw}: {stderr or 'grep failed'}", None
+
+    output = (result.stdout or "").strip()
+    if not output:
+        return f"{ref.raw}: no matches for pattern", None
+
+    # Limit output to 200 lines max
+    lines_found = output.splitlines()
+    truncated = False
+    if len(lines_found) > 200:
+        lines_found = lines_found[:200]
+        truncated = True
+
+    content_text = "\n".join(lines_found)
+    if truncated:
+        content_text += "\n... (truncated, showing first 200 of more matches)"
+
+    label = "@grep:" + raw_target
+    n_matches = len(lines_found)
+    tokens = estimate_tokens_rough(content_text)
+    return None, "\U0001f50d " + label + " (" + str(n_matches) + " matches, " + str(tokens) + " tokens)\n" + content_text
 
 
 def _expand_git_reference(
