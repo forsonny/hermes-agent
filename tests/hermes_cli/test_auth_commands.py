@@ -33,6 +33,13 @@ def _clear_provider_env(monkeypatch):
         "CLAUDE_CODE_OAUTH_TOKEN",
     ):
         monkeypatch.delenv(key, raising=False)
+    # Prevent real ~/.codex/auth.json from leaking into test credential pools.
+    # Without this, _seed_from_singletons imports Codex CLI tokens and adds
+    # an extra entry, causing assertion failures on openai-codex tests.
+    monkeypatch.setattr(
+        "hermes_cli.auth._import_codex_cli_tokens",
+        lambda *a, **kw: None,
+    )
 
 
 def test_auth_add_api_key_persists_manual_entry(tmp_path, monkeypatch):
