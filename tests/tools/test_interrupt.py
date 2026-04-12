@@ -28,13 +28,20 @@ class TestInterruptModule:
         assert not is_interrupted()
 
     def test_thread_safety(self):
-        """Set from one thread, check from another."""
+        """Set from one thread, check from another.
+
+        The interrupt system is per-thread: set_interrupt(True) without
+        an explicit thread_id targets the CALLING thread.  To interrupt
+        a different thread we must pass its ident explicitly.
+        """
         from tools.interrupt import set_interrupt, is_interrupted
         set_interrupt(False)
 
         seen = {"value": False}
+        checker_tid = {"tid": None}
 
         def _checker():
+            checker_tid["tid"] = threading.current_thread().ident
             while not is_interrupted():
                 time.sleep(0.01)
             seen["value"] = True
@@ -42,14 +49,21 @@ class TestInterruptModule:
         t = threading.Thread(target=_checker, daemon=True)
         t.start()
 
+        # Wait for the checker to start and register its thread ident
+        for _ in range(50):
+            if checker_tid["tid"] is not None:
+                break
+            time.sleep(0.01)
+
         time.sleep(0.05)
         assert not seen["value"]
 
-        set_interrupt(True)
+        # Interrupt the checker thread by passing its ident explicitly
+        set_interrupt(True, thread_id=checker_tid["tid"])
         t.join(timeout=1)
         assert seen["value"]
 
-        set_interrupt(False)
+        set_interrupt(False, thread_id=checker_tid["tid"])
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +183,12 @@ class TestSIGKILLEscalation:
         reason="Requires bash"
     )
     def test_sigterm_trap_killed_within_2s(self):
-        """A process that traps SIGTERM should be SIGKILL'd after 1s grace."""
+        """A process that traps SIGTERM should be SIGKILL'd after 1s grace.
+
+        The interrupt system is per-thread: we must pass the worker
+        thread's ident to set_interrupt() so the execute() running on
+        that thread sees the interrupt signal.
+        """
         from tools.interrupt import set_interrupt
         from tools.environments.local import LocalEnvironment
 
@@ -178,8 +197,10 @@ class TestSIGKILLEscalation:
 
         # Start execution in a thread, interrupt after 0.5s
         result_holder = {"value": None}
+        worker_tid = {"tid": None}
 
         def _run():
+            worker_tid["tid"] = threading.current_thread().ident
             result_holder["value"] = env.execute(
                 "trap '' TERM; sleep 60",
                 timeout=30,
@@ -188,11 +209,17 @@ class TestSIGKILLEscalation:
         t = threading.Thread(target=_run)
         t.start()
 
+        # Wait for the worker thread to register its ident
+        for _ in range(50):
+            if worker_tid["tid"] is not None:
+                break
+            time.sleep(0.01)
+
         time.sleep(0.5)
-        set_interrupt(True)
+        set_interrupt(True, thread_id=worker_tid["tid"])
 
         t.join(timeout=5)
-        set_interrupt(False)
+        set_interrupt(False, thread_id=worker_tid["tid"])
 
         assert result_holder["value"] is not None
         assert result_holder["value"]["returncode"] == 130
