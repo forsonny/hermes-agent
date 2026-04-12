@@ -5419,6 +5419,8 @@ class HermesCLI:
             self._show_usage()
         elif canonical == "insights":
             self._show_insights(cmd_original)
+        elif canonical == "diff":
+            self._show_diff(cmd_original)
         elif canonical == "paste":
             self._handle_paste_command()
         elif canonical == "image":
@@ -6432,6 +6434,88 @@ class HermesCLI:
             logging.getLogger().setLevel(logging.INFO)
             for quiet_logger in ('tools', 'run_agent', 'trajectory_compressor', 'cron', 'hermes_cli'):
                 logging.getLogger(quiet_logger).setLevel(logging.ERROR)
+
+    def _show_diff(self, command: str = "/diff"):
+        """Show git diff of current changes in the working directory."""
+        import subprocess
+
+        # Parse arguments
+        parts = command.split()
+        args = parts[1:] if len(parts) > 1 else []
+
+        # Determine working directory
+        cwd = self._cwd if hasattr(self, '_cwd') and self._cwd else None
+        if not cwd:
+            import os
+            cwd = os.getcwd()
+
+        # Build git diff command
+        git_args = ["git", "diff"]
+        stat_only = False
+        paths = []
+        for arg in args:
+            if arg == "--stat":
+                stat_only = True
+            elif arg == "--cached" or arg == "--staged":
+                git_args.append("--cached")
+            elif arg.startswith('-'):
+                git_args.append(arg)
+            else:
+                paths.append(arg)
+
+        if stat_only:
+            git_args.append("--stat")
+
+        if paths:
+            git_args.append("--")
+            git_args.extend(paths)
+
+        try:
+            result = subprocess.run(
+                git_args, cwd=cwd, capture_output=True, text=True, timeout=10
+            )
+            output = result.stdout.strip()
+            if not output:
+                if stat_only:
+                    print("  No changes in working directory.")
+                else:
+                    print("  No changes. Use /diff --cached to see staged changes.")
+                return
+
+            # Color the diff output
+            if stat_only:
+                print()
+                print(output)
+            else:
+                lines = output.split("\n")
+                max_lines = 200
+                truncated = len(lines) > max_lines
+                if truncated:
+                    lines = lines[:max_lines]
+                print()
+                for line in lines:
+                    if line.startswith("diff --git"):
+                        print(f"  {_BOLD}{line}{_RST}")
+                    elif line.startswith("@@"):
+                        print(f"  \033[36m{line}{_RST}")
+                    elif line.startswith('+') and not line.startswith('+++'):
+                        print(f"  \033[32m{line}{_RST}")
+                    elif line.startswith('-') and not line.startswith('---'):
+                        print(f"  \033[31m{line}{_RST}")
+                    else:
+                        print(f"  {line}")
+                if truncated:
+                    count = len(output.split(chr(10)))
+                    print(f"  {_DIM}... (truncated, {count} total lines){_RST}")
+                print()
+
+        except FileNotFoundError:
+            print("  git not found. Install git to use /diff.")
+        except subprocess.TimeoutExpired:
+            print("  git diff timed out (repository may be too large).")
+        except Exception as e:
+            print(f"  Error running git diff: {e}")
+
 
     def _show_insights(self, command: str = "/insights"):
         """Show usage insights and analytics from session history."""

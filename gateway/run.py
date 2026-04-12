@@ -2745,6 +2745,9 @@ class GatewayRunner:
         if canonical == "insights":
             return await self._handle_insights_command(event)
 
+        if canonical == "diff":
+            return await self._handle_diff_command(event)
+
         if canonical == "reload-mcp":
             return await self._handle_reload_mcp_command(event)
 
@@ -6258,6 +6261,64 @@ class GatewayRunner:
         except Exception as e:
             logger.error("Insights command error: %s", e, exc_info=True)
             return f"Error generating insights: {e}"
+
+    async def _handle_diff_command(self, event: MessageEvent) -> str:
+        """Handle /diff command -- show git diff of current changes."""
+        import subprocess
+        import shlex
+
+        # Parse arguments from the event text
+        text = getattr(event, 'text', '') or ''
+        parts = text.strip().split()
+        args = parts[1:] if len(parts) > 1 else []
+
+        # Determine working directory
+        cwd = os.getenv("HERMES_HOME", os.path.expanduser("~/.hermes"))
+
+        # Build git diff command
+        git_args = ["git", "diff"]
+        stat_only = False
+        paths = []
+        for arg in args:
+            if arg == "--stat":
+                stat_only = True
+            elif arg == "--cached" or arg == "--staged":
+                git_args.append("--cached")
+            elif arg.startswith('-'):
+                git_args.append(arg)
+            else:
+                paths.append(arg)
+
+        if stat_only:
+            git_args.append("--stat")
+
+        if paths:
+            git_args.append("--")
+            git_args.extend(paths)
+
+        try:
+            result = subprocess.run(
+                git_args, cwd=cwd, capture_output=True, text=True, timeout=10
+            )
+            output = result.stdout.strip()
+            if not output:
+                if stat_only:
+                    return "No changes in working directory."
+                else:
+                    return "No changes. Use /diff --cached to see staged changes."
+
+            # Limit output for messaging platforms
+            max_chars = 3000
+            if len(output) > max_chars:
+                output = output[:max_chars] + f"\n... (truncated, {len(output)} total chars)"
+            return f"```diff\n{output}\n```"
+
+        except FileNotFoundError:
+            return "git not found. Install git to use /diff."
+        except subprocess.TimeoutExpired:
+            return "git diff timed out (repository may be too large)."
+        except Exception as e:
+            return f"Error running git diff: {e}"
 
     async def _handle_reload_mcp_command(self, event: MessageEvent) -> str:
         """Handle /reload-mcp command -- disconnect and reconnect all MCP servers."""

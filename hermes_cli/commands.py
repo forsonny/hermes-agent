@@ -154,6 +154,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                cli_only=True, args_hint="<path>"),
     CommandDef("update", "Update Hermes Agent to the latest version", "Info",
                gateway_only=True),
+    CommandDef("diff", "Show git diff of current changes", "Info",
+               args_hint="[--stat|--cached|<path>]"),
 
     # Exit
     CommandDef("quit", "Exit the CLI", "Exit",
