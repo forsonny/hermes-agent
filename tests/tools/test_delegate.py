@@ -12,6 +12,7 @@ Run with:  python -m pytest tests/test_delegate.py -v
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -20,15 +21,19 @@ from unittest.mock import MagicMock, patch
 from tools.delegate_tool import (
     DELEGATE_BLOCKED_TOOLS,
     DELEGATE_TASK_SCHEMA,
+    _build_child_agent,
+    _build_child_progress_callback,
+    _build_child_system_prompt,
     _get_max_concurrent_children,
+    _load_config,
+    _resolve_child_credential_pool,
+    _resolve_delegation_credentials,
+    _resolve_workspace_hint,
+    _run_single_child,
+    _strip_blocked_tools,
     MAX_DEPTH,
     check_delegate_requirements,
     delegate_task,
-    _build_child_agent,
-    _build_child_system_prompt,
-    _strip_blocked_tools,
-    _resolve_child_credential_pool,
-    _resolve_delegation_credentials,
 )
 
 
@@ -1276,6 +1281,517 @@ class TestDelegationReasoningEffort(unittest.TestCase):
         )
         call_kwargs = MockAgent.call_args[1]
         self.assertEqual(call_kwargs["reasoning_config"], {"enabled": True, "effort": "medium"})
+
+
+
+
+class TestResolveWorkspaceHint(unittest.TestCase):
+    """Tests for _resolve_workspace_hint: resolves workspace path from
+    env vars and parent agent attributes."""
+
+    def test_env_terminal_cwd(self):
+        """TERMINAL_CWD env var is the highest-priority candidate."""
+        parent = _make_mock_parent()
+        with tempfile.TemporaryDirectory() as td:
+            with patch.dict(os.environ, {"TERMINAL_CWD": td}, clear=False):
+                result = _resolve_workspace_hint(parent)
+            self.assertEqual(result, td)
+
+    def test_subdirectory_hints_working_dir(self):
+        """_subdirectory_hints.working_dir is the second-priority candidate."""
+        parent = _make_mock_parent()
+        with tempfile.TemporaryDirectory() as td:
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("TERMINAL_CWD", None)
+                hints = MagicMock()
+                hints.working_dir = td
+                parent._subdirectory_hints = hints
+                result = _resolve_workspace_hint(parent)
+            self.assertEqual(result, td)
+
+    def test_terminal_cwd_attribute(self):
+        """parent.terminal_cwd is the third-priority candidate."""
+        parent = _make_mock_parent()
+        with tempfile.TemporaryDirectory() as td:
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("TERMINAL_CWD", None)
+                parent.terminal_cwd = td
+                result = _resolve_workspace_hint(parent)
+            self.assertEqual(result, td)
+
+    def test_cwd_attribute(self):
+        """parent.cwd is the fourth-priority candidate."""
+        parent = _make_mock_parent()
+        with tempfile.TemporaryDirectory() as td:
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("TERMINAL_CWD", None)
+                parent.cwd = td
+                result = _resolve_workspace_hint(parent)
+            self.assertEqual(result, td)
+
+    def test_priority_order_env_over_attributes(self):
+        """TERMINAL_CWD env var takes priority over parent attributes."""
+        parent = _make_mock_parent()
+        with tempfile.TemporaryDirectory() as td1, tempfile.TemporaryDirectory() as td2:
+            parent.cwd = td1
+            with patch.dict(os.environ, {"TERMINAL_CWD": td2}, clear=False):
+                result = _resolve_workspace_hint(parent)
+            self.assertEqual(result, td2)
+
+    def test_no_candidates_returns_none(self):
+        parent = _make_mock_parent()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TERMINAL_CWD", None)
+            result = _resolve_workspace_hint(parent)
+        self.assertIsNone(result)
+
+    def test_nonexistent_dir_rejected(self):
+        parent = _make_mock_parent()
+        parent.cwd = "/nonexistent/path/that/does/not/exist"
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TERMINAL_CWD", None)
+            result = _resolve_workspace_hint(parent)
+        self.assertIsNone(result)
+
+    def test_empty_string_ignored(self):
+        parent = _make_mock_parent()
+        parent.cwd = ""
+        parent.terminal_cwd = ""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TERMINAL_CWD", None)
+            result = _resolve_workspace_hint(parent)
+        self.assertIsNone(result)
+
+    def test_tilde_expansion(self):
+        parent = _make_mock_parent()
+        parent.cwd = "~"
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TERMINAL_CWD", None)
+            result = _resolve_workspace_hint(parent)
+        self.assertIsNotNone(result)
+        self.assertTrue(os.path.isabs(result))
+
+
+class TestBuildChildProgressCallback(unittest.TestCase):
+    """Tests for _build_child_progress_callback: builds a callback that relays
+    child agent tool calls to the parent display."""
+
+    def test_no_spinner_no_callback_returns_none(self):
+        parent = _make_mock_parent()
+        parent._delegate_spinner = None
+        parent.tool_progress_callback = None
+        result = _build_child_progress_callback(0, parent)
+        self.assertIsNone(result)
+
+    def test_spinner_only_creates_callback(self):
+        parent = _make_mock_parent()
+        spinner = MagicMock()
+        parent._delegate_spinner = spinner
+        parent.tool_progress_callback = None
+        cb = _build_child_progress_callback(0, parent)
+        self.assertIsNotNone(cb)
+        self.assertTrue(callable(cb))
+
+    def test_callback_only_creates_callback(self):
+        parent = _make_mock_parent()
+        parent._delegate_spinner = None
+        parent.tool_progress_callback = MagicMock()
+        cb = _build_child_progress_callback(0, parent)
+        self.assertIsNotNone(cb)
+
+    def test_tool_started_prints_to_spinner(self):
+        parent = _make_mock_parent()
+        spinner = MagicMock()
+        parent._delegate_spinner = spinner
+        parent.tool_progress_callback = None
+        cb = _build_child_progress_callback(0, parent, task_count=1)
+        cb("tool.started", tool_name="terminal", preview="ls -la")
+        spinner.print_above.assert_called_once()
+        line = spinner.print_above.call_args[0][0]
+        self.assertIn("terminal", line)
+        self.assertIn("ls -la", line)
+
+    def test_tool_completed_is_noop(self):
+        parent = _make_mock_parent()
+        spinner = MagicMock()
+        parent._delegate_spinner = spinner
+        parent.tool_progress_callback = None
+        cb = _build_child_progress_callback(0, parent)
+        cb("tool.completed", tool_name="terminal")
+        spinner.print_above.assert_not_called()
+
+    def test_thinking_event_prints_to_spinner(self):
+        parent = _make_mock_parent()
+        spinner = MagicMock()
+        parent._delegate_spinner = spinner
+        parent.tool_progress_callback = MagicMock()
+        cb = _build_child_progress_callback(0, parent)
+        cb("_thinking", tool_name="Analyzing the codebase for patterns")
+        spinner.print_above.assert_called_once()
+        line = spinner.print_above.call_args[0][0]
+        self.assertIn("Analyzing", line)
+
+    def test_thinking_event_truncates_long_text(self):
+        parent = _make_mock_parent()
+        spinner = MagicMock()
+        parent._delegate_spinner = spinner
+        parent.tool_progress_callback = MagicMock()
+        cb = _build_child_progress_callback(0, parent)
+        long_text = "x" * 100
+        cb("_thinking", tool_name=long_text)
+        line = spinner.print_above.call_args[0][0]
+        # The line should contain a truncated version with "..."
+        self.assertIn("...", line)
+        # The displayed text should be shorter than the original 100 chars
+        self.assertLessEqual(len(line), 100)
+
+    def test_gateway_batching_flushes_at_threshold(self):
+        parent = _make_mock_parent()
+        parent._delegate_spinner = None
+        gw_cb = MagicMock()
+        parent.tool_progress_callback = gw_cb
+        cb = _build_child_progress_callback(0, parent, task_count=1)
+        # Default batch size is 5
+        for i in range(5):
+            cb("tool.started", tool_name=f"tool_{i}")
+        gw_cb.assert_called_once()
+        call_args = gw_cb.call_args[0]
+        self.assertEqual(call_args[0], "subagent_progress")
+        self.assertIn("tool_0", call_args[1])
+        self.assertIn("tool_4", call_args[1])
+
+    def test_flush_sends_remaining_batch(self):
+        parent = _make_mock_parent()
+        parent._delegate_spinner = None
+        gw_cb = MagicMock()
+        parent.tool_progress_callback = gw_cb
+        cb = _build_child_progress_callback(0, parent, task_count=1)
+        cb("tool.started", tool_name="tool_a")
+        cb("tool.started", tool_name="tool_b")
+        gw_cb.assert_not_called()  # Not enough to auto-flush
+        cb._flush()
+        gw_cb.assert_called_once()
+        call_args = gw_cb.call_args[0]
+        self.assertIn("tool_a", call_args[1])
+        self.assertIn("tool_b", call_args[1])
+
+    def test_flush_empty_batch_is_noop(self):
+        parent = _make_mock_parent()
+        parent._delegate_spinner = None
+        gw_cb = MagicMock()
+        parent.tool_progress_callback = gw_cb
+        cb = _build_child_progress_callback(0, parent, task_count=1)
+        cb._flush()
+        gw_cb.assert_not_called()
+
+    def test_batch_prefix_with_multiple_tasks(self):
+        parent = _make_mock_parent()
+        spinner = MagicMock()
+        parent._delegate_spinner = spinner
+        parent.tool_progress_callback = None
+        cb = _build_child_progress_callback(0, parent, task_count=3)
+        cb("tool.started", tool_name="terminal")
+        line = spinner.print_above.call_args[0][0]
+        self.assertIn("[1]", line)  # 1-indexed prefix
+
+    def test_no_prefix_with_single_task(self):
+        parent = _make_mock_parent()
+        spinner = MagicMock()
+        parent._delegate_spinner = spinner
+        parent.tool_progress_callback = None
+        cb = _build_child_progress_callback(0, parent, task_count=1)
+        cb("tool.started", tool_name="terminal")
+        line = spinner.print_above.call_args[0][0]
+        self.assertNotIn("[1]", line)
+
+    def test_reasoning_event_relayed_to_spinner(self):
+        parent = _make_mock_parent()
+        spinner = MagicMock()
+        parent._delegate_spinner = spinner
+        parent.tool_progress_callback = MagicMock()
+        cb = _build_child_progress_callback(0, parent)
+        cb("reasoning.available", tool_name="Thinking about the problem")
+        spinner.print_above.assert_called_once()
+
+    def test_spinner_exception_handled_gracefully(self):
+        parent = _make_mock_parent()
+        spinner = MagicMock()
+        spinner.print_above.side_effect = RuntimeError("display error")
+        parent._delegate_spinner = spinner
+        parent.tool_progress_callback = None
+        cb = _build_child_progress_callback(0, parent)
+        # Should not raise
+        cb("tool.started", tool_name="terminal")
+        cb("_thinking", tool_name="thinking")
+
+
+class TestLoadConfig(unittest.TestCase):
+    """Tests for _load_config: loads delegation config from CLI_CONFIG or
+    persistent config."""
+
+    def test_returns_dict(self):
+        result = _load_config()
+        self.assertIsInstance(result, dict)
+
+    def test_missing_config_returns_empty_dict(self):
+        """When no config source is available, returns empty dict."""
+        with patch("hermes_cli.config.load_config", side_effect=Exception("no config")):
+            result = _load_config()
+        self.assertIsInstance(result, dict)
+
+
+class TestGetMaxConcurrentChildren(unittest.TestCase):
+    """Tests for _get_max_concurrent_children: reads from config, env, or default."""
+
+    def test_default_is_3(self):
+        with patch("tools.delegate_tool._load_config", return_value={}):
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("DELEGATION_MAX_CONCURRENT_CHILDREN", None)
+                result = _get_max_concurrent_children()
+        self.assertEqual(result, 3)
+
+    def test_config_value_overrides_default(self):
+        with patch("tools.delegate_tool._load_config", return_value={"max_concurrent_children": 5}):
+            result = _get_max_concurrent_children()
+        self.assertEqual(result, 5)
+
+    def test_env_fallback(self):
+        with patch("tools.delegate_tool._load_config", return_value={}):
+            with patch.dict(os.environ, {"DELEGATION_MAX_CONCURRENT_CHILDREN": "7"}):
+                result = _get_max_concurrent_children()
+        self.assertEqual(result, 7)
+
+    def test_config_takes_priority_over_env(self):
+        with patch("tools.delegate_tool._load_config", return_value={"max_concurrent_children": 4}):
+            with patch.dict(os.environ, {"DELEGATION_MAX_CONCURRENT_CHILDREN": "7"}):
+                result = _get_max_concurrent_children()
+        self.assertEqual(result, 4)
+
+    def test_minimum_is_1(self):
+        with patch("tools.delegate_tool._load_config", return_value={"max_concurrent_children": -5}):
+            result = _get_max_concurrent_children()
+        self.assertEqual(result, 1)
+
+    def test_zero_clamped_to_1(self):
+        with patch("tools.delegate_tool._load_config", return_value={"max_concurrent_children": 0}):
+            result = _get_max_concurrent_children()
+        self.assertEqual(result, 1)
+
+    def test_invalid_config_value_uses_default(self):
+        with patch("tools.delegate_tool._load_config", return_value={"max_concurrent_children": "abc"}):
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("DELEGATION_MAX_CONCURRENT_CHILDREN", None)
+                result = _get_max_concurrent_children()
+        self.assertEqual(result, 3)
+
+    def test_invalid_env_value_uses_default(self):
+        with patch("tools.delegate_tool._load_config", return_value={}):
+            with patch.dict(os.environ, {"DELEGATION_MAX_CONCURRENT_CHILDREN": "xyz"}):
+                result = _get_max_concurrent_children()
+        self.assertEqual(result, 3)
+
+    def test_large_value_accepted(self):
+        with patch("tools.delegate_tool._load_config", return_value={"max_concurrent_children": 100}):
+            result = _get_max_concurrent_children()
+        self.assertEqual(result, 100)
+
+
+class TestRunSingleChildEdgeCases(unittest.TestCase):
+    """Edge cases for _run_single_child."""
+
+    def test_model_as_non_string_returns_none(self):
+        child = MagicMock()
+        child.model = 12345  # not a string
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "done",
+            "completed": True,
+            "interrupted": False,
+            "api_calls": 1,
+            "messages": [],
+        }
+        result = _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        self.assertIsNone(result["model"])
+
+    def test_tokens_as_non_numeric_returns_zero(self):
+        child = MagicMock()
+        child.model = "test-model"
+        child.session_prompt_tokens = "not-a-number"
+        child.session_completion_tokens = None
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "done",
+            "completed": True,
+            "interrupted": False,
+            "api_calls": 1,
+            "messages": [],
+        }
+        result = _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        self.assertEqual(result["tokens"]["input"], 0)
+        self.assertEqual(result["tokens"]["output"], 0)
+
+    def test_empty_summary_marks_failed(self):
+        child = MagicMock()
+        child.model = "test-model"
+        child.session_prompt_tokens = 0
+        child.session_completion_tokens = 0
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "",
+            "completed": False,
+            "interrupted": False,
+            "api_calls": 50,
+            "messages": [],
+        }
+        result = _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["exit_reason"], "max_iterations")
+        self.assertIn("error", result)
+
+    def test_interrupted_status(self):
+        child = MagicMock()
+        child.model = "test-model"
+        child.session_prompt_tokens = 0
+        child.session_completion_tokens = 0
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "",
+            "completed": False,
+            "interrupted": True,
+            "api_calls": 2,
+            "messages": [],
+        }
+        result = _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(result["exit_reason"], "interrupted")
+
+    def test_completed_with_summary(self):
+        child = MagicMock()
+        child.model = "test-model"
+        child.session_prompt_tokens = 100
+        child.session_completion_tokens = 50
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "All tests passed",
+            "completed": True,
+            "interrupted": False,
+            "api_calls": 5,
+            "messages": [],
+        }
+        result = _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["summary"], "All tests passed")
+        self.assertEqual(result["exit_reason"], "completed")
+        self.assertEqual(result["tokens"]["input"], 100)
+        self.assertEqual(result["tokens"]["output"], 50)
+
+    def test_exception_returns_error_status(self):
+        child = MagicMock()
+        child._credential_pool = None
+        child.run_conversation.side_effect = RuntimeError("API timeout")
+        result = _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        self.assertEqual(result["status"], "error")
+        self.assertIn("API timeout", result["error"])
+        self.assertEqual(result["api_calls"], 0)
+
+    def test_child_close_called_in_finally(self):
+        child = MagicMock()
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "done",
+            "completed": True,
+            "interrupted": False,
+            "api_calls": 1,
+            "messages": [],
+        }
+        _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        child.close.assert_called_once()
+
+    def test_child_close_called_even_on_error(self):
+        child = MagicMock()
+        child._credential_pool = None
+        child.run_conversation.side_effect = RuntimeError("crash")
+        _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        child.close.assert_called_once()
+
+    def test_child_unregistered_from_active_children(self):
+        parent = _make_mock_parent()
+        child = MagicMock()
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "done",
+            "completed": True,
+            "interrupted": False,
+            "api_calls": 1,
+            "messages": [],
+        }
+        parent._active_children.append(child)
+        _run_single_child(0, "test goal", child=child, parent_agent=parent)
+        self.assertEqual(len(parent._active_children), 0)
+
+    def test_no_pool_skips_leasing(self):
+        child = MagicMock()
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "done",
+            "completed": True,
+            "interrupted": False,
+            "api_calls": 1,
+            "messages": [],
+        }
+        _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        # Should not try to acquire/release lease
+
+    def test_messages_with_no_tool_calls(self):
+        child = MagicMock()
+        child.model = "test-model"
+        child.session_prompt_tokens = 0
+        child.session_completion_tokens = 0
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "simple response",
+            "completed": True,
+            "interrupted": False,
+            "api_calls": 1,
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi there"},
+            ],
+        }
+        result = _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        self.assertEqual(result["tool_trace"], [])
+        self.assertEqual(result["status"], "completed")
+
+    def test_duration_is_recorded(self):
+        child = MagicMock()
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "done",
+            "completed": True,
+            "interrupted": False,
+            "api_calls": 1,
+            "messages": [],
+        }
+        result = _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        self.assertIn("duration_seconds", result)
+        self.assertGreaterEqual(result["duration_seconds"], 0)
+
+    def test_progress_callback_flushed_on_completion(self):
+        """Progress callback flush is called after child completes."""
+        child = MagicMock()
+        child._credential_pool = None
+        child.run_conversation.return_value = {
+            "final_response": "done",
+            "completed": True,
+            "interrupted": False,
+            "api_calls": 1,
+            "messages": [],
+        }
+        mock_cb = MagicMock()
+        mock_cb._flush = MagicMock()
+        child.tool_progress_callback = mock_cb
+        _run_single_child(0, "test goal", child=child, parent_agent=_make_mock_parent())
+        mock_cb._flush.assert_called_once()
 
 
 if __name__ == "__main__":
