@@ -25,6 +25,7 @@ def _reset_logging_state():
     """
     hermes_logging._logging_initialized = False
     root = logging.getLogger()
+    saved_root_level = root.level
     # Strip ALL RotatingFileHandlers — not just the ones we added — so that
     # handlers leaked from other test modules in the same xdist worker don't
     # pollute our counts.
@@ -43,6 +44,7 @@ def _reset_logging_state():
         if h not in pre_existing:
             root.removeHandler(h)
             h.close()
+    root.level = saved_root_level
     hermes_logging._logging_initialized = False
     hermes_logging.clear_session_context()
 
@@ -620,6 +622,7 @@ class TestAddRotatingHandler:
         """Handlers rely on record factory, not per-handler _SessionFilter."""
         log_path = tmp_path / "no_session_filter.log"
         logger = logging.getLogger("_test_no_session_filter")
+        logger.setLevel(logging.DEBUG)  # ensure INFO messages pass through
         formatter = logging.Formatter("%(session_tag)s%(message)s")
 
         hermes_logging._add_rotating_handler(
