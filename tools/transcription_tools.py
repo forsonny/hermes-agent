@@ -37,8 +37,6 @@ from utils import is_truthy_value
 from tools.managed_tool_gateway import resolve_managed_tool_gateway
 from tools.tool_backend_helpers import managed_nous_tools_enabled, resolve_openai_audio_api_key
 
-from hermes_constants import get_hermes_home
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------

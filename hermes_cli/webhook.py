@@ -176,8 +176,8 @@ def _cmd_subscribe(args):
         prompt_preview = route["prompt"][:80] + ("..." if len(route["prompt"]) > 80 else "")
         print(f"  Prompt: {prompt_preview}")
     print(f"\n  Configure your service to POST to the URL above.")
-    print(f"  Use the secret for HMAC-SHA256 signature validation.")
-    print(f"  The gateway must be running to receive events (hermes gateway run).\n")
+    print("  Use the secret for HMAC-SHA256 signature validation.")
+    print("  The gateway must be running to receive events (hermes gateway run).\n")
 
 
 def _cmd_list(args):
