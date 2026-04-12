@@ -1,10 +1,12 @@
-"""Tests for agent/display.py — build_tool_preview(), get_cute_tool_message(), and inline diff previews."""
+"""Tests for agent/display.py -- build_tool_preview(), get_cute_tool_message(), and inline diff previews."""
 
+import json
 import os
 import pytest
 from unittest.mock import MagicMock, patch
 
 from agent.display import (
+    _detect_tool_failure,
     build_tool_preview,
     capture_local_edit_snapshot,
     extract_edit_diff,
@@ -266,3 +268,137 @@ class TestGetCuteToolMessageNewEntries:
         msg = get_cute_tool_message("terminal", {"command": "ls -la"}, 1.0)
         assert "ls -la" in msg
         assert "$" in msg
+
+
+class TestDetectToolFailure:
+    """Tests for _detect_tool_failure -- failure detection in tool results."""
+
+    def test_none_result_is_success(self):
+        is_fail, tag = _detect_tool_failure("any_tool", None)
+        assert is_fail is False
+        assert tag == ""
+
+    def test_empty_string_is_success(self):
+        is_fail, tag = _detect_tool_failure("any_tool", "")
+        assert is_fail is False
+        assert tag == ""
+
+    def test_terminal_nonzero_exit(self):
+        result = json.dumps({"exit_code": 1, "output": "error"})
+        is_fail, tag = _detect_tool_failure("terminal", result)
+        assert is_fail is True
+        assert "exit 1" in tag
+
+    def test_terminal_zero_exit_is_success(self):
+        result = json.dumps({"exit_code": 0, "output": "ok"})
+        is_fail, tag = _detect_tool_failure("terminal", result)
+        assert is_fail is False
+
+    def test_error_none_is_not_false_positive(self):
+        """Tools return error: None on success -- must NOT be flagged."""
+        result = json.dumps({"url": "https://example.com", "error": None})
+        is_fail, tag = _detect_tool_failure("vision_analyze", result)
+        assert is_fail is False
+        assert tag == ""
+
+    def test_error_empty_string_is_success(self):
+        result = json.dumps({"data": "ok", "error": ""})
+        is_fail, tag = _detect_tool_failure("some_tool", result)
+        assert is_fail is False
+
+    def test_error_false_is_success(self):
+        result = json.dumps({"success": True, "error": False})
+        is_fail, tag = _detect_tool_failure("some_tool", result)
+        assert is_fail is False
+
+    def test_error_with_message_is_failure(self):
+        result = json.dumps({"error": "Something went wrong"})
+        is_fail, tag = _detect_tool_failure("some_tool", result)
+        assert is_fail is True
+        assert "error" in tag
+
+    def test_status_error_is_failure(self):
+        result = json.dumps({"status": "error", "message": "bad"})
+        is_fail, tag = _detect_tool_failure("some_tool", result)
+        assert is_fail is True
+
+    def test_status_failed_is_failure(self):
+        result = json.dumps({"status": "failed", "message": "bad"})
+        is_fail, tag = _detect_tool_failure("some_tool", result)
+        assert is_fail is True
+
+    def test_starts_with_error_is_failure(self):
+        is_fail, tag = _detect_tool_failure("some_tool", "Error: connection refused")
+        assert is_fail is True
+
+    def test_no_error_field_is_success(self):
+        result = json.dumps({"output": "hello", "status": "ok"})
+        is_fail, tag = _detect_tool_failure("some_tool", result)
+        assert is_fail is False
+
+    def test_complex_success_with_null_error(self):
+        result = json.dumps({
+            "url": "https://example.com",
+            "content": "page content here",
+            "status_code": 200,
+            "error": None,
+        })
+        is_fail, tag = _detect_tool_failure("web_extract", result)
+        assert is_fail is False
+
+    def test_error_none_with_nested_data(self):
+        result = json.dumps({
+            "images": [{"url": "https://img.png", "size": 1024}],
+            "error": None,
+            "prompt": "a sunset",
+        })
+        is_fail, tag = _detect_tool_failure("image_generate", result)
+        assert is_fail is False
+
+    def test_delegate_error(self):
+        result = json.dumps({"error": "depth limit exceeded"})
+        is_fail, tag = _detect_tool_failure("delegate_task", result)
+        assert is_fail is True
+
+    def test_delegate_partial_failure(self):
+        result = json.dumps({
+            "results": [
+                {"summary": "ok"},
+                {"error": "timeout"},
+            ]
+        })
+        is_fail, tag = _detect_tool_failure("delegate_task", result)
+        assert is_fail is True
+        assert "1/2 failed" in tag
+
+    def test_delegate_success(self):
+        result = json.dumps({"results": [{"summary": "done"}]})
+        is_fail, tag = _detect_tool_failure("delegate_task", result)
+        assert is_fail is False
+
+    def test_process_killed(self):
+        result = json.dumps({"status": "killed"})
+        is_fail, tag = _detect_tool_failure("process", result)
+        assert is_fail is True
+        assert "killed" in tag
+
+    def test_process_success(self):
+        result = json.dumps({"status": "done", "output": "ok"})
+        is_fail, tag = _detect_tool_failure("process", result)
+        assert is_fail is False
+
+    def test_execute_code_nonzero_exit(self):
+        result = json.dumps({"exit_code": 1, "error": "NameError"})
+        is_fail, tag = _detect_tool_failure("execute_code", result)
+        assert is_fail is True
+
+    def test_execute_code_timeout(self):
+        result = json.dumps({"exit_code": 1, "error": "Command timed out"})
+        is_fail, tag = _detect_tool_failure("execute_code", result)
+        assert is_fail is True
+        assert "timeout" in tag
+
+    def test_execute_code_success(self):
+        result = json.dumps({"exit_code": 0, "output": "result"})
+        is_fail, tag = _detect_tool_failure("execute_code", result)
+        assert is_fail is False

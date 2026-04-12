@@ -839,8 +839,23 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
         return False, ""
 
     # Generic heuristic for non-terminal tools
+    # Try structured check first: parse JSON and inspect error field value.
+    # Many tools return "error": None on success — the naive string check
+    # for '"error"' would falsely flag these as failures.
+    try:
+        data = json.loads(result)
+        if isinstance(data, dict):
+            err_val = data.get("error")
+            if err_val is not None and err_val != "" and err_val is not False:
+                return True, " [error]"
+            if data.get("status") in ("error", "failed"):
+                return True, " [error]"
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    # Fallback: string heuristic for non-JSON results or edge cases
     lower = result[:500].lower()
-    if '"error"' in lower or '"failed"' in lower or result.startswith("Error"):
+    if '"failed"' in lower or result.startswith("Error"):
         return True, " [error]"
 
     return False, ""
