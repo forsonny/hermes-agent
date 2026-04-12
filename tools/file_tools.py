@@ -581,6 +581,44 @@ def _dependency_install_hint(filepath: str) -> str | None:
     return None
 
 
+
+def _syntax_check_hint(filepath: str) -> str | None:
+    """Run py_compile on a Python file after writing to catch syntax errors.
+
+    Returns a hint string if a syntax error is found, or None if the file
+    is valid (or is not a Python file).  Inspired by Aider auto-lint
+    pattern -- catching errors immediately prevents wasted iterations.
+    """
+    import py_compile
+
+    # Only check Python files
+    if not filepath.endswith(".py"):
+        return None
+
+    try:
+        resolved = str(Path(filepath).expanduser().resolve())
+    except (OSError, ValueError):
+        return None
+
+    if not os.path.isfile(resolved):
+        return None
+
+    try:
+        py_compile.compile(resolved, doraise=True)
+    except py_compile.PyCompileError as exc:
+        msg = str(exc)
+        basename = os.path.basename(resolved)
+        if "SyntaxError" in msg or "IndentationError" in msg:
+            for line in msg.split("\n"):
+                if "SyntaxError" in line or "IndentationError" in line:
+                    hint = line.replace(resolved, basename).strip()
+                    return f"Syntax error in {basename}: fix before further edits.\n  {hint}"
+            return f"Syntax error detected in {basename}. Read the file to find the issue."
+        return f"Compile error in {basename}: {msg[:200]}"
+    except Exception:
+        pass
+    return None
+
 def _check_file_staleness(filepath: str, task_id: str) -> str | None:
     """Check whether a file was modified since the agent last read it.
 
@@ -633,6 +671,10 @@ def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
             dep_hint = _dependency_install_hint(path)
             if dep_hint:
                 result_json += f"\n\n[Hint: {dep_hint}]"
+            # Syntax check for Python files
+            syn_hint = _syntax_check_hint(path)
+            if syn_hint:
+                result_json += f"\n\n[Hint: {syn_hint}]"
         return result_json
     except Exception as e:
         if _is_expected_write_exception(e):
@@ -703,6 +745,11 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                     dep_hints.append(_dh)
             if dep_hints:
                 result_json += "\n\n[Hint: " + " ".join(dep_hints) + "]"
+            # Syntax check for Python files
+            for _p in _paths_to_check:
+                _syn = _syntax_check_hint(_p)
+                if _syn:
+                    result_json += f"\n\n[Hint: {_syn}]"
         return result_json
     except Exception as e:
         return tool_error(str(e))

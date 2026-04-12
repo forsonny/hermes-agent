@@ -490,3 +490,109 @@ class TestDependencyInstallHintFunction:
 
 
 
+"""Tests for _syntax_check_hint -- auto-lint after file writes."""
+
+import os
+import tempfile
+
+import pytest
+
+
+class TestSyntaxCheckHint:
+    """Tests for the _syntax_check_hint function."""
+
+    def test_valid_python_file_returns_none(self, tmp_path):
+        """A valid Python file should return None."""
+        from tools.file_tools import _syntax_check_hint
+
+        valid_file = tmp_path / "valid.py"
+        valid_file.write_text("x = 1\nprint(x)\n")
+        result = _syntax_check_hint(str(valid_file))
+        assert result is None
+
+    def test_non_python_file_returns_none(self, tmp_path):
+        """Non-Python files should be skipped."""
+        from tools.file_tools import _syntax_check_hint
+
+        js_file = tmp_path / "app.js"
+        js_file.write_text("function broken( { }\n")
+        result = _syntax_check_hint(str(js_file))
+        assert result is None
+
+    def test_syntax_error_returns_hint(self, tmp_path):
+        """A Python file with syntax errors should return a hint."""
+        from tools.file_tools import _syntax_check_hint
+
+        bad_file = tmp_path / "broken.py"
+        bad_file.write_text("def foo():\n    return\nx = \n")
+        result = _syntax_check_hint(str(bad_file))
+        assert result is not None
+        assert "Syntax error" in result
+        assert "broken.py" in result
+
+    def test_indentation_error_returns_hint(self, tmp_path):
+        """Indentation errors should also be caught."""
+        from tools.file_tools import _syntax_check_hint
+
+        bad_file = tmp_path / "indent.py"
+        bad_file.write_text("def foo():\n  pass\n   return 1\n")
+        result = _syntax_check_hint(str(bad_file))
+        assert result is not None
+        assert "Syntax error" in result or "Compile error" in result
+
+    def test_nonexistent_file_returns_none(self):
+        """Non-existent files should return None."""
+        from tools.file_tools import _syntax_check_hint
+
+        result = _syntax_check_hint("/tmp/nonexistent_file_xyz.py")
+        assert result is None
+
+    def test_empty_python_file_returns_none(self, tmp_path):
+        """An empty Python file is valid."""
+        from tools.file_tools import _syntax_check_hint
+
+        empty_file = tmp_path / "empty.py"
+        empty_file.write_text("")
+        result = _syntax_check_hint(str(empty_file))
+        assert result is None
+
+    def test_complex_valid_file_returns_none(self, tmp_path):
+        """Complex valid Python with type hints, decorators, etc."""
+        from tools.file_tools import _syntax_check_hint
+
+        code = (
+            "from typing import Optional, List\n"
+            "\n"
+            "class MyClass:\n"
+            "    def __init__(self, name: str) -> None:\n"
+            "        self.name = name\n"
+            "\n"
+            "    def greet(self, greeting: str = 'hello') -> Optional[str]:\n"
+            "        return greeting + ', ' + self.name\n"
+            "\n"
+            "def main() -> List[str]:\n"
+            "    obj = MyClass('world')\n"
+            "    return [obj.greet()]\n"
+        )
+        valid_file = tmp_path / "complex.py"
+        valid_file.write_text(code)
+        result = _syntax_check_hint(str(valid_file))
+        assert result is None
+
+    def test_unterminated_string_returns_hint(self, tmp_path):
+        """Unterminated string literal should be caught."""
+        from tools.file_tools import _syntax_check_hint
+
+        bad_file = tmp_path / "unterminated.py"
+        bad_file.write_text('msg = "hello\nprint(msg)\n')
+        result = _syntax_check_hint(str(bad_file))
+        assert result is not None
+
+    def test_hint_mentions_fix(self, tmp_path):
+        """Hint should mention fixing the error."""
+        from tools.file_tools import _syntax_check_hint
+
+        bad_file = tmp_path / "fixme.py"
+        bad_file.write_text("x = \n")
+        result = _syntax_check_hint(str(bad_file))
+        assert "fix" in result.lower() or "error" in result.lower()
