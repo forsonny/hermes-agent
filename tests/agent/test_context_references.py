@@ -378,7 +378,7 @@ def test_expand_map_no_python_files(tmp_path):
     )
 
     assert result.expanded
-    assert "no Python files found" in result.message
+    assert "no source files found" in result.message
 
 
 def test_expand_map_on_file_uses_parent(tmp_path):
@@ -546,3 +546,230 @@ def test_expand_grep_skips_venv_dirs(tmp_path):
     assert result.expanded
     assert "FIND_MARKER_UNIQUE" in result.message
     assert "SKIP_MARKER_UNIQUE" not in result.message
+# --- Multi-language @map: tests ---
+
+def test_expand_map_javascript(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "jsproject"
+    repo.mkdir()
+    (repo / "app.js").write_text(
+        "class App extends Component {\n"
+        "    render() { return null; }\n"
+        "    componentDidMount() { console.log(\"mounted\"); }\n"
+        "}\n"
+        "\n"
+        "function hello(name) { return \"hi\"; }\n"
+        "\n"
+        "const add = (a, b) => a + b;\n",
+        encoding="utf-8",
+    )
+
+    result = preprocess_context_references(
+        "Review @map:.",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "class App" in result.message
+    assert "fn render()" in result.message
+    assert "fn componentDidMount()" in result.message
+    assert "fn hello(name)" in result.message
+    assert "fn add(a, b)" in result.message
+
+
+def test_expand_map_typescript(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "tsproject"
+    repo.mkdir()
+    (repo / "types.ts").write_text(
+        "export interface User { name: string; }\n"
+        "\n"
+        "export type Result<T> = { data: T; }\n"
+        "\n"
+        "export function fetchUser(id: string): Promise<User> { }\n",
+        encoding="utf-8",
+    )
+
+    result = preprocess_context_references(
+        "Review @map:.",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "interface User" in result.message
+    assert "type Result" in result.message
+    assert "fn fetchUser(id: string)" in result.message
+
+
+def test_expand_map_go(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "goproject"
+    repo.mkdir()
+    (repo / "main.go").write_text(
+        "package main\n"
+        "\n"
+        "type Server struct { Addr string }\n"
+        "\n"
+        "type Handler interface { Handle(req Request) Response }\n"
+        "\n"
+        "func main() { }\n"
+        "\n"
+        "func (s *Server) Start() error { return nil }\n",
+        encoding="utf-8",
+    )
+
+    result = preprocess_context_references(
+        "Review @map:.",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "type Server struct" in result.message
+    assert "type Handler interface" in result.message
+    assert "fn main()" in result.message
+    assert "fn Start()" in result.message
+
+
+def test_expand_map_rust(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "rustproject"
+    repo.mkdir()
+    (repo / "lib.rs").write_text(
+        "pub struct Config { name: String, }\n"
+        "\n"
+        "enum Result<T> { Ok(T), Err(Error), }\n"
+        "\n"
+        "trait Processor { fn process(&self, data: &[u8]); }\n"
+        "\n"
+        "impl Config {\n"
+        "    pub fn new(name: &str) -> Self { }\n"
+        "}\n"
+        "\n"
+        "pub fn run(config: Config) { }\n",
+        encoding="utf-8",
+    )
+
+    result = preprocess_context_references(
+        "Review @map:.",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "struct Config" in result.message
+    assert "enum Result" in result.message
+    assert "trait Processor" in result.message
+    assert "impl Config" in result.message
+    assert "fn new(name: &str)" in result.message
+    assert "fn run(config: Config)" in result.message
+
+
+def test_expand_map_mixed_languages(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "mixedproject"
+    repo.mkdir()
+    (repo / "app.py").write_text(
+        "class PyService:\n"
+        "    def run(self):\n"
+        "        pass\n"
+        "\n"
+        "def main():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    (repo / "index.ts").write_text(
+        "export class TsClient {\n"
+        "    connect() { }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (repo / "main.go").write_text(
+        "func main() { }\n",
+        encoding="utf-8",
+    )
+
+    result = preprocess_context_references(
+        "Review @map:.",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    # Python symbols
+    assert "class PyService" in result.message
+    assert "def main" in result.message
+    # TypeScript symbols
+    assert "class TsClient" in result.message
+    # Go symbols
+    assert "fn main()" in result.message
+    # Language note should mention "other files"
+    assert "other files" in result.message
+
+
+def test_expand_map_no_source_files(tmp_path):
+    from agent.context_references import preprocess_context_references
+
+    repo = tmp_path / "emptyproject"
+    repo.mkdir()
+    (repo / "README.md").write_text("# Empty project", encoding="utf-8")
+    (repo / "config.yaml").write_text("key: value", encoding="utf-8")
+
+    result = preprocess_context_references(
+        "Review @map:.",
+        cwd=repo,
+        context_length=100_000,
+    )
+
+    assert result.expanded
+    assert "no source files found" in result.message
+
+
+def test_extract_regex_symbols_js_methods():
+    from agent.context_references import _extract_regex_symbols, _JS_TS_PATTERNS
+
+    source = (
+        "class App {\n"
+        "    render() {}\n"
+        "    async loadData() {}\n"
+        "}\n"
+    )
+    entries = _extract_regex_symbols(source, "JavaScript", _JS_TS_PATTERNS)
+    assert "  class App" in entries
+    assert "    fn render()" in entries
+    assert "    fn loadData()" in entries
+
+
+def test_extract_regex_symbols_go():
+    from agent.context_references import _extract_regex_symbols, _GO_PATTERNS
+
+    source = (
+        "type Server struct { Addr string }\n"
+        "func main() { }\n"
+        "func (s *Server) Start() error { return nil }\n"
+    )
+    entries = _extract_regex_symbols(source, "Go", _GO_PATTERNS)
+    assert "  type Server struct" in entries
+    assert "  fn main()" in entries
+    assert "  fn Start()" in entries
+
+
+def test_extract_regex_symbols_rust():
+    from agent.context_references import _extract_regex_symbols, _RUST_PATTERNS
+
+    source = (
+        "pub struct Config { name: String }\n"
+        "enum Status { Active, Inactive }\n"
+        "impl Config { pub fn new() -> Self { } }\n"
+    )
+    entries = _extract_regex_symbols(source, "Rust", _RUST_PATTERNS)
+    assert "  struct Config" in entries
+    assert "  enum Status" in entries
+    assert "  impl Config" in entries

@@ -281,92 +281,6 @@ def _expand_folder_reference(
     return None, f"📁 {ref.raw} ({estimate_tokens_rough(listing)} tokens)\n{listing}"
 
 
-def _expand_map_reference(
-    ref: ContextReference,
-    cwd: Path,
-    *,
-    allowed_root: Path | None = None,
-) -> tuple[str | None, str | None]:
-    """Generate a compact code-structure map of a directory using Python's ``ast`` module.
-
-    The target defaults to ``.`` (cwd).  For each Python file discovered the map
-    lists top-level classes (with methods) and top-level functions together with
-    their signatures — similar to Aider's repo-map but with zero external
-    dependencies.
-    """
-    import ast as _ast
-
-    # Resolve the directory to scan
-    raw_target = ref.target or "."
-    path = _resolve_path(cwd, raw_target, allowed_root=allowed_root)
-    _ensure_reference_path_allowed(path)
-    if not path.exists():
-        return f"{ref.raw}: path not found", None
-    if path.is_file():
-        path = path.parent
-
-    # Collect Python files (skip venv, __pycache__, .git, node_modules)
-    _SKIP_DIRS = {
-        "venv", ".venv", "__pycache__", ".git", "node_modules",
-        ".tox", ".mypy_cache", ".pytest_cache", "dist", "build", "egg-info",
-    }
-    py_files: list[Path] = []
-    for root, dirs, files in os.walk(path):
-        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
-        for f in sorted(files):
-            if f.endswith(".py"):
-                py_files.append(Path(root) / f)
-        if len(py_files) >= 80:
-            break
-
-    if not py_files:
-        return f"{ref.raw}: no Python files found", None
-
-    lines: list[str] = []
-    total_symbols = 0
-
-    for fpath in py_files:
-        rel = fpath.relative_to(cwd) if fpath.is_relative_to(cwd) else fpath.relative_to(path)
-        try:
-            source = fpath.read_text(encoding="utf-8", errors="replace")
-            tree = _ast.parse(source, filename=str(fpath))
-        except (SyntaxError, UnicodeDecodeError):
-            # Skip files we can't parse
-            continue
-
-        file_entries: list[str] = []
-
-        for node in _ast.iter_child_nodes(tree):
-            if isinstance(node, _ast.ClassDef):
-                sig = _format_class_sig(node)
-                file_entries.append(f"  class {node.name}{sig}")
-                total_symbols += 1
-                # Methods
-                for item in node.body:
-                    if isinstance(item, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
-                        mname = item.name
-                        if mname.startswith("_") and mname != "__init__":
-                            continue  # skip private helpers
-                        msig = _format_func_sig(item)
-                        file_entries.append(f"    def {mname}{msig}")
-                        total_symbols += 1
-            elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
-                sig = _format_func_sig(node)
-                file_entries.append(f"  def {node.name}{sig}")
-                total_symbols += 1
-
-        if file_entries:
-            lines.append(f"{rel}")
-            lines.extend(file_entries)
-
-    if not lines:
-        return f"{ref.raw}: no symbols found in {len(py_files)} Python files", None
-
-    content = "\n".join(lines)
-    label = f"@map:{raw_target}" if raw_target != "." else "@map:."
-    return None, f"🗺️  {label} — {total_symbols} symbols from {len(py_files)} files ({estimate_tokens_rough(content)} tokens)\n{content}"
-
-
 def _format_func_sig(node: "ast.FunctionDef | ast.AsyncFunctionDef") -> str:
     """Format a function signature string from an AST node."""
     import ast as _ast
@@ -422,7 +336,225 @@ def _format_class_sig(node: "ast.ClassDef") -> str:
     return f"({', '.join(bases)})"
 
 
+# ---------------------------------------------------------------------------
+# Regex-based symbol extraction for non-Python languages
+# ---------------------------------------------------------------------------
 
+_JS_TS_PATTERNS = [
+    # class Name extends Base
+    re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)"),
+    # function name(args)
+    re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)"),
+    # Shorthand method: name(args) { (inside class body)
+    re.compile(r"^\s+(?:async\s+)?(?!if|for|while|switch|catch)(\w+)\s*\(([^)]*)\)\s*{"),
+    # const/let/var name = (args) => ...
+    re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(([^)]*)\)\s*(?::\s*[^=]+?)?\s*=>"),
+    # const/let/var name = function(args)
+    re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?function\s*\(([^)]*)\)"),
+    # interface Name
+    re.compile(r"^\s*(?:export\s+)?interface\s+(\w+)"),
+    # type Name = ...
+    re.compile(r"^\s*(?:export\s+)?type\s+(\w+)"),
+]
+
+_GO_PATTERNS = [
+    # func Name(args) or func (recv) Name(args)
+    re.compile(r"^\s*func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(([^)]*)\)"),
+    # type Name struct/interface
+    re.compile(r"^\s*type\s+(\w+)\s+(struct|interface)"),
+]
+
+_RUST_PATTERNS = [
+    # fn name(args) -> RetType
+    re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)"),
+    # struct/enum/trait Name
+    re.compile(r"^\s*(?:pub\s+)?(?:struct|enum|trait)\s+(\w+)"),
+    # impl Name
+    re.compile(r"^\s*impl\s+(?:<[^>]*>\s+)?(\w+)"),
+]
+
+_LANG_CONFIG = {
+    ".js": ("JavaScript", _JS_TS_PATTERNS),
+    ".jsx": ("JavaScript", _JS_TS_PATTERNS),
+    ".mjs": ("JavaScript", _JS_TS_PATTERNS),
+    ".cjs": ("JavaScript", _JS_TS_PATTERNS),
+    ".ts": ("TypeScript", _JS_TS_PATTERNS),
+    ".tsx": ("TypeScript", _JS_TS_PATTERNS),
+    ".go": ("Go", _GO_PATTERNS),
+    ".rs": ("Rust", _RUST_PATTERNS),
+}
+
+
+def _extract_regex_symbols(source: str, lang: str, patterns: list) -> list[str]:
+    """Extract symbol names from non-Python source using regex patterns."""
+    entries: list[str] = []
+    brace_depth = 0
+    in_class = False
+    class_indent = 0
+
+    for line in source.splitlines():
+        stripped = line.rstrip()
+        indent = len(stripped) - len(stripped.lstrip())
+
+        # Track brace depth for JS/TS class body detection
+        if lang in ("JavaScript", "TypeScript"):
+            brace_depth += stripped.count("{") - stripped.count("}")
+
+        matched = False
+        for pat in patterns:
+            m = pat.match(stripped)
+            if not m:
+                continue
+            name = m.group(1)
+            args = m.group(2).strip() if len(m.groups()) > 1 else ""
+
+            if lang in ("JavaScript", "TypeScript"):
+                # Check for class keyword anywhere before the name
+                if re.search(r"\bclass\s+" + re.escape(name), stripped):
+                    entries.append(f"  class {name}")
+                    in_class = True
+                    class_indent = indent
+                elif "interface " in stripped and re.search(r"\binterface\s+" + re.escape(name), stripped):
+                    entries.append(f"  interface {name}")
+                elif "type " in stripped and re.search(r"\btype\s+" + re.escape(name), stripped):
+                    entries.append(f"  type {name}")
+                else:
+                    # Function or method
+                    is_method = in_class and indent > class_indent
+                    prefix = "    " if is_method else "  "
+                    entries.append(f"{prefix}fn {name}({args})")
+            elif lang == "Go":
+                if "type " in stripped:
+                    kind = m.group(2) if len(m.groups()) > 1 else ""
+                    entries.append(f"  type {name} {kind}".rstrip())
+                else:
+                    entries.append(f"  fn {name}({args})")
+            elif lang == "Rust":
+                if "impl " in stripped:
+                    entries.append(f"  impl {name}")
+                elif "trait " in stripped:
+                    entries.append(f"  trait {name}")
+                elif "enum " in stripped:
+                    entries.append(f"  enum {name}")
+                elif re.search(r"\bstruct\s+" + re.escape(name), stripped):
+                    entries.append(f"  struct {name}")
+                else:
+                    entries.append(f"  fn {name}({args})")
+
+            matched = True
+            break
+
+        # Reset class tracking when brace depth returns to 0
+        if lang in ("JavaScript", "TypeScript") and brace_depth <= 0:
+            in_class = False
+            brace_depth = 0
+
+    return entries
+
+
+
+def _expand_map_reference(
+    ref: ContextReference,
+    cwd: Path,
+    *,
+    allowed_root: Path | None = None,
+) -> tuple[str | None, str | None]:
+    """Generate a compact code-structure map of a directory.
+
+    Scans Python files via AST (classes, functions, signatures) and
+    JavaScript/TypeScript, Go, Rust files via regex-based extraction.
+    Produces a compact repo-map similar to Aider's ``--map-tokens`` feature.
+    """
+    import ast as _ast
+
+    # Resolve the directory to scan
+    raw_target = ref.target or "."
+    path = _resolve_path(cwd, raw_target, allowed_root=allowed_root)
+    _ensure_reference_path_allowed(path)
+    if not path.exists():
+        return f"{ref.raw}: path not found", None
+    if path.is_file():
+        path = path.parent
+
+    # Collect source files (skip venv, __pycache__, .git, node_modules)
+    _SKIP_DIRS = {
+        "venv", ".venv", "__pycache__", ".git", "node_modules",
+        ".tox", ".mypy_cache", ".pytest_cache", "dist", "build", "egg-info",
+    }
+    _PYTHON_EXT = ".py"
+    _ALL_EXTS = {_PYTHON_EXT} | set(_LANG_CONFIG.keys())
+
+    source_files: list[tuple[Path, str]] = []  # (path, ext)
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
+        for f in sorted(files):
+            ext = os.path.splitext(f)[1]
+            if ext in _ALL_EXTS:
+                source_files.append((Path(root) / f, ext))
+        if len(source_files) >= 80:
+            break
+
+    if not source_files:
+        return f"{ref.raw}: no source files found", None
+
+    lines: list[str] = []
+    total_symbols = 0
+
+    for fpath, ext in source_files:
+        rel = fpath.relative_to(cwd) if fpath.is_relative_to(cwd) else fpath.relative_to(path)
+        try:
+            source = fpath.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+        file_entries: list[str] = []
+
+        if ext == _PYTHON_EXT:
+            # Use AST for Python files
+            try:
+                tree = _ast.parse(source, filename=str(fpath))
+            except SyntaxError:
+                continue
+
+            for node in _ast.iter_child_nodes(tree):
+                if isinstance(node, _ast.ClassDef):
+                    sig = _format_class_sig(node)
+                    file_entries.append(f"  class {node.name}{sig}")
+                    total_symbols += 1
+                    for item in node.body:
+                        if isinstance(item, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                            mname = item.name
+                            if mname.startswith("_") and mname != "__init__":
+                                continue
+                            msig = _format_func_sig(item)
+                            file_entries.append(f"    def {mname}{msig}")
+                            total_symbols += 1
+                elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    sig = _format_func_sig(node)
+                    file_entries.append(f"  def {node.name}{sig}")
+                    total_symbols += 1
+        else:
+            # Use regex-based extraction for other languages
+            lang, patterns = _LANG_CONFIG[ext]
+            file_entries = _extract_regex_symbols(source, lang, patterns)
+            total_symbols += len(file_entries)
+
+        if file_entries:
+            lines.append(f"{rel}")
+            lines.extend(file_entries)
+
+    if not lines:
+        return f"{ref.raw}: no symbols found in {len(source_files)} files", None
+
+    content = "\n".join(lines)
+    label = f"@map:{raw_target}" if raw_target != "." else "@map:."
+    n_py = sum(1 for _, e in source_files if e == _PYTHON_EXT)
+    n_other = len(source_files) - n_py
+    if n_other:
+        lang_note = f"{n_py} Python + {n_other} other files"
+    else:
+        lang_note = f"{len(source_files)} files"
+    return None, f"\U0001f5fa  {label} \u2014 {total_symbols} symbols from {lang_note} ({estimate_tokens_rough(content)} tokens)\n{content}"
 def _expand_grep_reference(
     ref: ContextReference,
     cwd: Path,
