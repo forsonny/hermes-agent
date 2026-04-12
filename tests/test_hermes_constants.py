@@ -10,7 +10,7 @@ from hermes_constants import get_default_hermes_root
 
 
 class TestGetDefaultHermesRoot:
-    """Tests for get_default_hermes_root() — Docker/custom deployment awareness."""
+    """Tests for get_default_hermes_root() -- Docker/custom deployment awareness."""
 
     def test_no_hermes_home_returns_native(self, tmp_path, monkeypatch):
         """When HERMES_HOME is not set, returns ~/.hermes."""
@@ -60,3 +60,130 @@ class TestGetDefaultHermesRoot:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setenv("HERMES_HOME", str(profile))
         assert get_default_hermes_root() == docker_root
+
+import socket
+
+from hermes_constants import apply_ipv4_preference
+
+
+class TestApplyIpv4Preference:
+    """Tests for apply_ipv4_preference() -- IPv4 network preference."""
+
+    def test_no_op_when_force_false(self):
+        """When force=False, socket.getaddrinfo is NOT patched."""
+        original = socket.getaddrinfo
+        apply_ipv4_preference(force=False)
+        assert socket.getaddrinfo is original
+
+    def test_no_op_when_force_false_explicit(self):
+        """Explicit False does not patch."""
+        original = socket.getaddrinfo
+        apply_ipv4_preference(False)
+        assert socket.getaddrinfo is original
+
+    def test_patches_when_force_true(self):
+        """When force=True, socket.getaddrinfo gets replaced."""
+        original = socket.getaddrinfo
+        try:
+            apply_ipv4_preference(force=True)
+            assert socket.getaddrinfo is not original
+            assert getattr(socket.getaddrinfo, "_hermes_ipv4_patched", False)
+        finally:
+            socket.getaddrinfo = original
+
+    def test_idempotent_double_call(self):
+        """Calling twice with force=True only patches once."""
+        original = socket.getaddrinfo
+        try:
+            apply_ipv4_preference(force=True)
+            first_patch = socket.getaddrinfo
+            apply_ipv4_preference(force=True)
+            assert socket.getaddrinfo is first_patch
+        finally:
+            socket.getaddrinfo = original
+
+    def test_patched_version_prefers_ipv4(self):
+        """The patched getaddrinfo calls with AF_INET when family=0 (AF_UNSPEC)."""
+        original = socket.getaddrinfo
+        calls = []
+
+        def _fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+            calls.append((host, port, family))
+            return [(family, 1, 0, "", ("1.2.3.4", port))]
+
+        try:
+            socket.getaddrinfo = _fake_getaddrinfo
+            apply_ipv4_preference(force=True)
+            # Clear calls from the guard check
+            calls.clear()
+            # Make a call with family=0 (AF_UNSPEC)
+            result = socket.getaddrinfo("example.com", 443)
+            # Should have been called with AF_INET (2) instead of AF_UNSPEC (0)
+            assert len(calls) >= 1
+            assert calls[0][2] == socket.AF_INET  # 2
+        finally:
+            socket.getaddrinfo = original
+
+    def test_patched_version_falls_back_on_gaierror(self):
+        """When AF_INET fails (gaierror), falls back to original resolution."""
+        original = socket.getaddrinfo
+        calls = []
+
+        def _fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+            calls.append((host, port, family))
+            if family == socket.AF_INET:
+                raise socket.gaierror("No IPv4")
+            return [(family, 1, 0, "", ("::1", port))]
+
+        try:
+            socket.getaddrinfo = _fake_getaddrinfo
+            apply_ipv4_preference(force=True)
+            calls.clear()
+            result = socket.getaddrinfo("ipv6-only.example.com", 443)
+            # Should have tried AF_INET first, then fallen back to AF_UNSPEC
+            assert len(calls) == 2
+            assert calls[0][2] == socket.AF_INET
+            assert calls[1][2] == 0  # AF_UNSPEC fallback
+        finally:
+            socket.getaddrinfo = original
+
+    def test_patched_version_passes_through_specific_family(self):
+        """When family is explicitly set (not AF_UNSPEC), passes through unchanged."""
+        original = socket.getaddrinfo
+        calls = []
+
+        def _fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+            calls.append((host, port, family))
+            return [(family, 1, 0, "", (host, port))]
+
+        try:
+            socket.getaddrinfo = _fake_getaddrinfo
+            apply_ipv4_preference(force=True)
+            calls.clear()
+            # Call with AF_INET6 (explicit family)
+            result = socket.getaddrinfo("example.com", 443, family=socket.AF_INET6)
+            assert len(calls) == 1
+            assert calls[0][2] == socket.AF_INET6  # Passed through unchanged
+        finally:
+            socket.getaddrinfo = original
+
+    def test_patched_version_preserves_extra_args(self):
+        """type, proto, flags are passed through to the original."""
+        original = socket.getaddrinfo
+        captured = {}
+
+        def _fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+            captured.update(host=host, port=port, type=type, proto=proto, flags=flags)
+            return [(family, type, proto, "", (host, port))]
+
+        try:
+            socket.getaddrinfo = _fake_getaddrinfo
+            apply_ipv4_preference(force=True)
+            socket.getaddrinfo("test.com", 8080, type=socket.SOCK_STREAM, proto=6, flags=socket.AI_PASSIVE)
+            assert captured["host"] == "test.com"
+            assert captured["port"] == 8080
+            assert captured["type"] == socket.SOCK_STREAM
+            assert captured["proto"] == 6
+            assert captured["flags"] == socket.AI_PASSIVE
+        finally:
+            socket.getaddrinfo = original

@@ -543,7 +543,14 @@ try:
     from hermes_cli.skin_engine import init_skin_from_config
     init_skin_from_config(CLI_CONFIG)
 except Exception:
-    pass  # Skin engine is optional — default skin used if unavailable
+    pass  # Skin engine is optional -- default skin used if unavailable
+
+# Apply IPv4 preference if configured (must happen before any network calls)
+try:
+    from hermes_constants import apply_ipv4_preference
+    apply_ipv4_preference(CLI_CONFIG.get("network", {}).get("force_ipv4", False))
+except Exception:
+    pass  # Network preference is best-effort -- don't crash the CLI
 
 # Initialize tool preview length from config
 try:
