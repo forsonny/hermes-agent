@@ -781,3 +781,233 @@ class TestTokenBudgetTailProtection:
         # Tool at index 2 is outside the protected tail (last 3 = indices 2,3,4)
         # so it might or might not be pruned depending on boundary
         assert isinstance(pruned, int)
+
+
+# ── Tests for rate-limit retry with exponential backoff ──────────────────────
+
+
+class TestIsRateLimitError:
+    """Tests for the _is_rate_limit_error helper function."""
+
+    def test_http_429_is_rate_limit(self):
+        from agent.context_compressor import _is_rate_limit_error
+        exc = Exception("rate limited")
+        exc.status_code = 429
+        assert _is_rate_limit_error(exc) is True
+
+    def test_http_429_with_billing_keyword_is_not_rate_limit(self):
+        from agent.context_compressor import _is_rate_limit_error
+        exc = Exception("insufficient credits")
+        exc.status_code = 429
+        assert _is_rate_limit_error(exc) is False
+
+    def test_rate_limit_in_message_without_429(self):
+        from agent.context_compressor import _is_rate_limit_error
+        exc = Exception("Rate limit exceeded for model")
+        assert _is_rate_limit_error(exc) is True
+
+    def test_rate_limit_underscore_in_message(self):
+        from agent.context_compressor import _is_rate_limit_error
+        exc = Exception("rate_limit: too many requests")
+        assert _is_rate_limit_error(exc) is True
+
+    def test_too_many_requests_in_message(self):
+        from agent.context_compressor import _is_rate_limit_error
+        exc = Exception("Too many requests")
+        assert _is_rate_limit_error(exc) is True
+
+    def test_generic_exception_is_not_rate_limit(self):
+        from agent.context_compressor import _is_rate_limit_error
+        exc = Exception("internal server error")
+        assert _is_rate_limit_error(exc) is False
+
+    def test_billing_keywords_not_rate_limit(self):
+        from agent.context_compressor import _is_rate_limit_error
+        for msg in ("out of credits", "billing issue", "payment required", "quota exceeded"):
+            exc = Exception(msg)
+            assert _is_rate_limit_error(exc) is False, msg
+
+    def test_http_500_is_not_rate_limit(self):
+        from agent.context_compressor import _is_rate_limit_error
+        exc = Exception("server error")
+        exc.status_code = 500
+        assert _is_rate_limit_error(exc) is False
+
+    def test_slow_down_in_message(self):
+        from agent.context_compressor import _is_rate_limit_error
+        exc = Exception("Please slow down your requests")
+        assert _is_rate_limit_error(exc) is True
+
+    def test_no_status_code_attribute(self):
+        from agent.context_compressor import _is_rate_limit_error
+        # Exception without status_code attribute
+        exc = ValueError("rate limit hit")
+        assert _is_rate_limit_error(exc) is True
+
+
+class TestCompressionRetryOnRateLimit:
+    """Tests for retry behavior when compression encounters rate-limit errors."""
+
+    def test_rate_limit_retries_before_cooldown(self):
+        """A 429 error should trigger retries with backoff, not immediate cooldown."""
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(model="test", quiet_mode=True)
+        messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
+
+        call_count = 0
+        def mock_call_llm(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            exc = Exception("rate limit exceeded")
+            exc.status_code = 429
+            raise exc
+
+        with patch("agent.context_compressor.call_llm", side_effect=mock_call_llm), \
+             patch("agent.context_compressor.time.sleep") as mock_sleep:
+            result = c._generate_summary(messages)
+
+        assert result is None
+        # Should have tried 4 times: initial + 3 retries
+        assert call_count == 4
+        # Should have slept with exponential backoff: 2, 4, 8
+        assert mock_sleep.call_count == 3
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        assert delays == [2.0, 4.0, 8.0]
+
+    def test_rate_limit_retry_succeeds_on_second_attempt(self):
+        """If the second attempt succeeds, return the summary without cooldown."""
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(model="test", quiet_mode=True)
+        messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
+
+        call_count = 0
+        def mock_call_llm(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                exc = Exception("rate limit")
+                exc.status_code = 429
+                raise exc
+            response = MagicMock()
+            response.choices = [MagicMock()]
+            response.choices[0].message.content = "Summary text"
+            return response
+
+        with patch("agent.context_compressor.call_llm", side_effect=mock_call_llm), \
+             patch("agent.context_compressor.time.sleep"):
+            result = c._generate_summary(messages)
+
+        assert result is not None
+        assert "Summary text" in result
+        assert call_count == 2
+        # Should NOT be in cooldown
+        assert c._summary_failure_cooldown_until == 0.0
+
+    def test_rate_limit_retries_exhausted_enters_cooldown(self):
+        """After all retries exhausted, enters full cooldown."""
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(model="test", quiet_mode=True)
+        messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
+
+        def mock_call_llm(**kwargs):
+            exc = Exception("too many requests")
+            raise exc
+
+        with patch("agent.context_compressor.call_llm", side_effect=mock_call_llm), \
+             patch("agent.context_compressor.time.sleep"), \
+             patch("agent.context_compressor.time.monotonic", return_value=100.0):
+            result = c._generate_summary(messages)
+
+        assert result is None
+        # Should be in cooldown (600s from now)
+        assert c._summary_failure_cooldown_until == 700.0
+
+    def test_non_rate_limit_error_no_retry(self):
+        """Non-rate-limit errors should NOT trigger retries."""
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(model="test", quiet_mode=True)
+        messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
+
+        call_count = 0
+        def mock_call_llm(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise Exception("internal server error")
+
+        with patch("agent.context_compressor.call_llm", side_effect=mock_call_llm), \
+             patch("agent.context_compressor.time.sleep") as mock_sleep:
+            result = c._generate_summary(messages)
+
+        assert result is None
+        # Should NOT have retried
+        assert call_count == 1
+        assert mock_sleep.call_count == 0
+
+    def test_runtime_error_no_retry(self):
+        """RuntimeError (no provider) should NOT trigger retries."""
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(model="test", quiet_mode=True)
+        messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
+
+        call_count = 0
+        def mock_call_llm(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("no provider")
+
+        with patch("agent.context_compressor.call_llm", side_effect=mock_call_llm), \
+             patch("agent.context_compressor.time.sleep") as mock_sleep:
+            result = c._generate_summary(messages)
+
+        assert result is None
+        assert call_count == 1
+        assert mock_sleep.call_count == 0
+
+    def test_rate_limit_retry_succeeds_on_third_attempt(self):
+        """Third attempt succeeds after 2 rate-limit errors."""
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(model="test", quiet_mode=True)
+        messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
+
+        call_count = 0
+        def mock_call_llm(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                exc = Exception("rate limit exceeded")
+                exc.status_code = 429
+                raise exc
+            response = MagicMock()
+            response.choices = [MagicMock()]
+            response.choices[0].message.content = "Recovered summary"
+            return response
+
+        with patch("agent.context_compressor.call_llm", side_effect=mock_call_llm), \
+             patch("agent.context_compressor.time.sleep"):
+            result = c._generate_summary(messages)
+
+        assert result is not None
+        assert "Recovered summary" in result
+        assert call_count == 3
+
+    def test_billing_429_no_retry(self):
+        """A 429 with billing keywords should NOT retry (not transient)."""
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(model="test", quiet_mode=True)
+        messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
+
+        call_count = 0
+        def mock_call_llm(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            exc = Exception("insufficient credits")
+            exc.status_code = 429
+            raise exc
+
+        with patch("agent.context_compressor.call_llm", side_effect=mock_call_llm), \
+             patch("agent.context_compressor.time.sleep") as mock_sleep:
+            result = c._generate_summary(messages)
+
+        assert result is None
+        assert call_count == 1
+        assert mock_sleep.call_count == 0

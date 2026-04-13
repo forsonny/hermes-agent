@@ -62,6 +62,29 @@ _PRUNED_TOOL_PLACEHOLDER = "[Old tool output cleared to save context space]"
 _CHARS_PER_TOKEN = 4
 _SUMMARY_FAILURE_COOLDOWN_SECONDS = 600
 
+# Retry configuration for transient rate-limit errors during compression.
+# A single 429 should NOT trigger the full 10-minute cooldown -- retry with
+# short backoff first.  Only if retries are exhausted do we enter cooldown.
+_COMPRESSION_MAX_RETRIES = 3
+_COMPRESSION_RETRY_BASE_DELAY = 2.0  # seconds; doubles each retry (2, 4, 8)
+
+
+def _is_rate_limit_error(exc):
+    status = getattr(exc, "status_code", None)
+    err_lower = str(exc).lower()
+    billing_keywords = (
+        "credits", "insufficient funds", "can only afford",
+        "billing", "payment required", "quota exceeded",
+    )
+    if any(kw in err_lower for kw in billing_keywords):
+        return False
+    if status == 429:
+        return True
+    rate_keywords = ("rate limit", "rate_limit", "too many requests", "slow down")
+    if any(kw in err_lower for kw in rate_keywords):
+        return True
+    return False
+
 
 def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) -> str:
     """Create an informative 1-line summary of a tool call + result.
@@ -679,80 +702,104 @@ Use this exact structure:
 FOCUS TOPIC: "{focus_topic}"
 The user has requested that this compaction PRIORITISE preserving all information related to the focus topic above. For content related to "{focus_topic}", include full detail — exact values, file paths, command outputs, error messages, and decisions. For content NOT related to the focus topic, summarise more aggressively (brief one-liners or omit if truly irrelevant). The focus topic sections should receive roughly 60-70% of the summary token budget."""
 
-        try:
-            call_kwargs = {
-                "task": "compression",
-                "main_runtime": {
-                    "model": self.model,
-                    "provider": self.provider,
-                    "base_url": self.base_url,
-                    "api_key": self.api_key,
-                    "api_mode": self.api_mode,
-                },
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": int(summary_budget * 1.3),
-                # timeout resolved from auxiliary.compression.timeout config by call_llm
-            }
-            if self.summary_model:
-                call_kwargs["model"] = self.summary_model
-            response = call_llm(**call_kwargs)
-            content = response.choices[0].message.content
-            # Handle cases where content is not a string (e.g., dict from llama.cpp)
-            if not isinstance(content, str):
-                content = str(content) if content else ""
-            summary = content.strip()
-            # Store for iterative updates on next compaction
-            self._previous_summary = summary
-            self._summary_failure_cooldown_until = 0.0
-            self._summary_model_fallen_back = False
-            return self._with_summary_prefix(summary)
-        except RuntimeError:
-            # No provider configured — long cooldown, unlikely to self-resolve
-            self._summary_failure_cooldown_until = time.monotonic() + _SUMMARY_FAILURE_COOLDOWN_SECONDS
-            logging.warning("Context compression: no provider available for "
-                            "summary. Middle turns will be dropped without summary "
-                            "for %d seconds.",
-                            _SUMMARY_FAILURE_COOLDOWN_SECONDS)
-            return None
-        except Exception as e:
-            # If the summary model is different from the main model and the
-            # error looks permanent (model not found, 503, 404), fall back to
-            # using the main model instead of entering cooldown that leaves
-            # context growing unbounded.  (#8620 sub-issue 4)
-            _status = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
-            _err_str = str(e).lower()
-            _is_model_not_found = (
-                _status in (404, 503)
-                or "model_not_found" in _err_str
-                or "does not exist" in _err_str
-                or "no available channel" in _err_str
-            )
-            if (
-                _is_model_not_found
-                and self.summary_model
-                and self.summary_model != self.model
-                and not getattr(self, "_summary_model_fallen_back", False)
-            ):
-                self._summary_model_fallen_back = True
-                logging.warning(
-                    "Summary model '%s' not available (%s). "
-                    "Falling back to main model '%s' for compression.",
-                    self.summary_model, e, self.model,
-                )
-                self.summary_model = ""  # empty = use main model
-                self._summary_failure_cooldown_until = 0.0  # no cooldown
-                return self._generate_summary(messages, summary_budget)  # retry immediately
+        call_kwargs = {
+            "task": "compression",
+            "main_runtime": {
+                "model": self.model,
+                "provider": self.provider,
+                "base_url": self.base_url,
+                "api_key": self.api_key,
+                "api_mode": self.api_mode,
+            },
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": int(summary_budget * 1.3),
+            # timeout resolved from auxiliary.compression.timeout config by call_llm
+        }
+        if self.summary_model:
+            call_kwargs["model"] = self.summary_model
 
-            # Transient errors (timeout, rate limit, network) — shorter cooldown
-            _transient_cooldown = 60
-            self._summary_failure_cooldown_until = time.monotonic() + _transient_cooldown
-            logging.warning(
-                "Failed to generate context summary: %s. "
-                "Further summary attempts paused for %d seconds.",
-                e,
-                _transient_cooldown,
-            )
-            return None
+        # Retry loop for transient rate-limit errors.  A single 429 should not
+        # trigger the cooldown -- back off briefly and try again.
+        last_error = None
+        for attempt in range(_COMPRESSION_MAX_RETRIES + 1):
+            try:
+                response = call_llm(**call_kwargs)
+                content = response.choices[0].message.content
+                # Handle cases where content is not a string (e.g., dict from llama.cpp)
+                if not isinstance(content, str):
+                    content = str(content) if content else ""
+                summary = content.strip()
+                # Store for iterative updates on next compaction
+                self._previous_summary = summary
+                self._summary_failure_cooldown_until = 0.0
+                self._summary_model_fallen_back = False
+                return self._with_summary_prefix(summary)
+            except RuntimeError:
+                # No provider configured -- long cooldown, unlikely to self-resolve
+                self._summary_failure_cooldown_until = time.monotonic() + _SUMMARY_FAILURE_COOLDOWN_SECONDS
+                logging.warning("Context compression: no provider available for "
+                                "summary. Middle turns will be dropped without summary "
+                                "for %d seconds.",
+                                _SUMMARY_FAILURE_COOLDOWN_SECONDS)
+                return None
+            except Exception as e:
+                last_error = e
+                # If the summary model is different from the main model and the
+                # error looks permanent (model not found, 503, 404), fall back to
+                # using the main model instead of entering cooldown.  (#8620)
+                _status = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
+                _err_str = str(e).lower()
+                _is_model_not_found = (
+                    _status in (404, 503)
+                    or "model_not_found" in _err_str
+                    or "does not exist" in _err_str
+                    or "no available channel" in _err_str
+                )
+                if (
+                    _is_model_not_found
+                    and self.summary_model
+                    and self.summary_model != self.model
+                    and not getattr(self, "_summary_model_fallen_back", False)
+                ):
+                    self._summary_model_fallen_back = True
+                    logging.warning(
+                        "Summary model '%s' not available (%s). "
+                        "Falling back to main model '%s' for compression.",
+                        self.summary_model, e, self.model,
+                    )
+                    self.summary_model = ""  # empty = use main model
+                    self._summary_failure_cooldown_until = 0.0  # no cooldown
+                    return self._generate_summary(messages, summary_budget)  # retry immediately
+
+                # Rate-limit: retry with exponential backoff
+                if _is_rate_limit_error(e) and attempt < _COMPRESSION_MAX_RETRIES:
+                    delay = _COMPRESSION_RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.info(
+                        "Context compression rate-limited (attempt %d/%d), "
+                        "retrying in %.1fs: %s",
+                        attempt + 1, _COMPRESSION_MAX_RETRIES + 1,
+                        delay, e,
+                    )
+                    time.sleep(delay)
+                    continue
+
+                # Non-retriable error or retries exhausted
+                _transient_cooldown = 60
+                self._summary_failure_cooldown_until = time.monotonic() + _transient_cooldown
+                logging.warning(
+                    "Failed to generate context summary: %s. "
+                    "Further summary attempts paused for %d seconds.",
+                    e,
+                    _transient_cooldown,
+                )
+                return None
+        # All retries exhausted (should not reach here, but defensive)
+        logging.warning(
+            "Context compression retries exhausted after %d attempts: %s",
+            _COMPRESSION_MAX_RETRIES + 1, last_error,
+        )
+        self._summary_failure_cooldown_until = time.monotonic() + _SUMMARY_FAILURE_COOLDOWN_SECONDS
+        return None
 
     @staticmethod
     def _with_summary_prefix(summary: str) -> str:
