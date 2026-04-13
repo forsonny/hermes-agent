@@ -19,6 +19,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import re
 from typing import Dict, Any, List, Optional, Union
 
 from agent.auxiliary_client import async_call_llm, extract_content_or_reasoning
@@ -86,195 +87,89 @@ def _format_conversation(messages: List[Dict[str, Any]]) -> str:
     return "\n\n".join(parts)
 
 
-def _find_all_match_positions(text_lower: str, query_terms: list) -> list:
-    """Find all positions where any query term appears in the text.
-
-    Returns a sorted list of (position, term_length) tuples.
-    """
-    positions = []
-    for term in query_terms:
-        if not term:
-            continue
-        start = 0
-        while True:
-            pos = text_lower.find(term, start)
-            if pos == -1:
-                break
-            positions.append((pos, len(term)))
-            start = pos + 1
-            if len(positions) > 500:
-                break
-    positions.sort()
-    return positions
-
-
-def _merge_regions(positions: list, gap: int) -> list:
-    """Merge overlapping/nearby match positions into contiguous regions.
-
-    Args:
-        positions: sorted list of (start, length) tuples
-        gap: maximum distance between matches to merge into one region
-
-    Returns:
-        list of (start, end) tuples representing merged regions
-    """
-    if not positions:
-        return []
-    regions = []
-    region_start = positions[0][0]
-    region_end = positions[0][0] + positions[0][1]
-    for pos, length in positions[1:]:
-        if pos - region_end <= gap:
-            region_end = max(region_end, pos + length)
-        else:
-            regions.append((region_start, region_end))
-            region_start = pos
-            region_end = pos + length
-    regions.append((region_start, region_end))
-    return regions
-
-
 def _truncate_around_matches(
     full_text: str, query: str, max_chars: int = MAX_SESSION_CHARS
 ) -> str:
     """
-    Truncate a conversation transcript to max_chars, covering ALL regions
-    where query terms appear. Keeps content near matches, trims between them.
+    Truncate a conversation transcript to *max_chars*, choosing a window
+    that maximises coverage of positions where the *query* actually appears.
 
-    Strategy:
-      1. Find all match positions for all query terms
-      2. Merge nearby matches into contiguous regions (500-char gap threshold)
-      3. If total fits within max_chars, include everything with gap markers
-      4. If total exceeds max_chars, allocate budget proportionally and
-         center each region's window around its match positions
+    Strategy (in priority order):
+    1. Try to find the full query as a phrase (case-insensitive).
+    2. If no phrase hit, look for positions where all query terms appear
+       within a 200-char proximity window (co-occurrence).
+    3. Fall back to individual term positions.
+
+    Once candidate positions are collected the function picks the window
+    start that covers the most of them.
     """
     if len(full_text) <= max_chars:
         return full_text
 
-    query_terms = [t for t in query.lower().split() if t]
-    if not query_terms:
-        return full_text[:max_chars]
-
     text_lower = full_text.lower()
+    query_lower = query.lower().strip()
+    match_positions: list[int] = []
 
-    # Step 1: Find all match positions
-    positions = _find_all_match_positions(text_lower, query_terms)
+    # --- 1. Full-phrase search ------------------------------------------------
+    phrase_pat = re.compile(re.escape(query_lower))
+    match_positions = [m.start() for m in phrase_pat.finditer(text_lower)]
 
-    if not positions:
-        # No matches found, take from the start
-        return full_text[:max_chars]
+    # --- 2. Proximity co-occurrence of all terms (within 200 chars) -----------
+    if not match_positions:
+        terms = query_lower.split()
+        if len(terms) > 1:
+            # Collect every occurrence of each term
+            term_positions: dict[str, list[int]] = {}
+            for t in terms:
+                term_positions[t] = [
+                    m.start() for m in re.finditer(re.escape(t), text_lower)
+                ]
+            # Slide through positions of the rarest term and check proximity
+            rarest = min(terms, key=lambda t: len(term_positions.get(t, [])))
+            for pos in term_positions.get(rarest, []):
+                if all(
+                    any(abs(p - pos) < 200 for p in term_positions.get(t, []))
+                    for t in terms
+                    if t != rarest
+                ):
+                    match_positions.append(pos)
 
-    # Step 2: Merge nearby matches into regions
-    # Matches within 500 chars of each other are considered the same topic
-    MERGE_GAP = 500
-    match_regions = _merge_regions(positions, MERGE_GAP)
+    # --- 3. Individual term positions (last resort) ---------------------------
+    if not match_positions:
+        terms = query_lower.split()
+        for t in terms:
+            for m in re.finditer(re.escape(t), text_lower):
+                match_positions.append(m.start())
 
-    # Step 3: Add context padding around each region
-    CONTEXT_PAD = 300  # chars of context before/after each match region
-    padded_regions = []
-    for start, end in match_regions:
-        padded_regions.append(
-            (max(0, start - CONTEXT_PAD), min(len(full_text), end + CONTEXT_PAD))
-        )
+    if not match_positions:
+        # Nothing at all — take from the start
+        truncated = full_text[:max_chars]
+        suffix = "\n\n...[later conversation truncated]..." if max_chars < len(full_text) else ""
+        return truncated + suffix
 
-    # Merge overlapping padded regions
-    merged = []
-    for start, end in padded_regions:
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
+    # --- Pick window that covers the most match positions ---------------------
+    match_positions.sort()
 
-    # Step 4: Check total size
-    total_size = sum(end - start for start, end in merged)
+    best_start = 0
+    best_count = 0
+    for candidate in match_positions:
+        ws = max(0, candidate - max_chars // 4)  # bias: 25% before, 75% after
+        we = ws + max_chars
+        if we > len(full_text):
+            ws = max(0, len(full_text) - max_chars)
+            we = len(full_text)
+        count = sum(1 for p in match_positions if ws <= p < we)
+        if count > best_count:
+            best_count = count
+            best_start = ws
 
-    if total_size <= max_chars:
-        # Everything fits -- build result with gap markers
-        result_parts = []
-        prev_end = 0
-        for start, end in merged:
-            if start > prev_end:
-                result_parts.append("...[conversation gap]...\n\n")
-            result_parts.append(full_text[start:end])
-            prev_end = end
+    start = best_start
+    end = min(len(full_text), start + max_chars)
 
-        prefix = "...[earlier conversation truncated]\n\n" if merged[0][0] > 0 else ""
-        suffix = "\n\n...[later conversation truncated]..." if merged[-1][1] < len(full_text) else ""
-        return prefix + "".join(result_parts) + suffix
-
-    # Step 5: Total exceeds max_chars -- allocate budget proportionally
-    n_regions = len(merged)
-    gap_marker = "...[conversation gap]...\n\n"
-    total_gap_markers = len(gap_marker) * max(0, n_regions - 1)
-    budget = max_chars - total_gap_markers
-    if budget < 200:
-        budget = max_chars  # fallback: no gap markers
-
-    # Each region gets budget proportional to its padded size
-    region_sizes = [end - start for start, end in merged]
-    min_per_region = max(100, budget // (n_regions * 3))
-
-    # Guaranteed minimum allocation for each region
-    allocations = []
-    remaining = budget
-    for size in region_sizes:
-        alloc = min(size, min_per_region)
-        allocations.append(alloc)
-        remaining -= alloc
-
-    # Distribute remaining budget proportionally
-    if remaining > 0:
-        unsaturated = [(i, region_sizes[i] - allocations[i])
-                       for i in range(n_regions) if region_sizes[i] > allocations[i]]
-        total_unsaturated = sum(extra for _, extra in unsaturated)
-        if total_unsaturated > 0:
-            for i, extra in unsaturated:
-                share = int(remaining * extra / total_unsaturated)
-                allocations[i] += share
-
-    # Build result: truncate each merged region to its allocation,
-    # centering around the original match region (not the padded boundary)
-    result_parts = []
-    for i, ((padded_start, padded_end), alloc) in enumerate(zip(merged, allocations)):
-        # Find the match region within this padded region
-        match_start = padded_start
-        match_end = padded_end
-        for ms, me in match_regions:
-            if ms >= padded_start and me <= padded_end:
-                match_start = ms
-                match_end = me
-                break
-
-        region_text = full_text[padded_start:padded_end]
-        region_alloc = alloc
-
-        if len(region_text) <= region_alloc:
-            result_parts.append(region_text)
-        else:
-            # Center the window around the match within this region
-            local_match_start = match_start - padded_start
-            local_match_end = match_end - padded_start
-            context_budget = region_alloc - (local_match_end - local_match_start)
-            if context_budget < 0:
-                context_budget = 0
-
-            half_ctx = context_budget // 2
-            clip_start = max(0, local_match_start - half_ctx)
-            clip_end = min(len(region_text), local_match_end + (context_budget - half_ctx))
-            if clip_start == 0:
-                clip_end = min(len(region_text), region_alloc)
-            if clip_end == len(region_text):
-                clip_start = max(0, clip_end - region_alloc)
-
-            result_parts.append(region_text[clip_start:clip_end])
-
-        if i < n_regions - 1:
-            result_parts.append(gap_marker)
-
-    prefix = "...[earlier conversation truncated]\n\n" if merged[0][0] > 0 else ""
-    suffix = "\n\n...[later conversation truncated]..." if merged[-1][1] < len(full_text) else ""
-    return prefix + "".join(result_parts) + suffix
-
+    truncated = full_text[start:end]
+    prefix = "...[earlier conversation truncated]...\n\n" if start > 0 else ""
+    suffix = "\n\n...[later conversation truncated]..." if end < len(full_text) else ""
+    return prefix + truncated + suffix
 
 
 async def _summarize_session(
