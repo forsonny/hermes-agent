@@ -180,6 +180,7 @@ class TestEphemeralMaxOutputTokens:
             return_value=[{"role": "user", "content": "hi"}]
         )
         agent._anthropic_preserve_dots = MagicMock(return_value=False)
+        agent.request_overrides = {}
         return agent
 
     def test_ephemeral_override_is_used_on_first_call(self):
@@ -254,6 +255,7 @@ class TestContextNotHalvedOnOutputCapError:
         )
         agent._anthropic_preserve_dots = MagicMock(return_value=False)
         agent._vprint = MagicMock()
+        agent.request_overrides = {}
         return agent
 
     def test_output_cap_error_sets_ephemeral_not_context_length(self):

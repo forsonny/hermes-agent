@@ -190,41 +190,38 @@ class TestGatewayCleanupWiring:
     def test_gateway_stop_calls_close(self):
         """gateway stop() should call close() on all running agents."""
         import asyncio
-        from unittest.mock import MagicMock, patch
+        import threading
+        from unittest.mock import AsyncMock, MagicMock, patch
 
-        from unittest.mock import AsyncMock
+        from gateway.run import GatewayRunner
 
-        runner = MagicMock()
+        runner = object.__new__(GatewayRunner)
         runner._running = True
         runner._running_agents = {}
+        runner._running_agents_ts = {}
         runner.adapters = {}
         runner._background_tasks = set()
         runner._pending_messages = {}
         runner._pending_approvals = {}
+        runner._pending_model_notes = {}
         runner._shutdown_event = asyncio.Event()
         runner._exit_reason = None
-        runner._exit_code = 0
+        runner._exit_code = None
         runner._stop_task = None
-        runner._restart_drain_timeout = 0
-        runner._restart_requested = False
         runner._draining = False
+        runner._restart_requested = False
+        runner._restart_task_started = False
         runner._restart_detached = False
         runner._restart_via_service = False
-
-        async def _drain(timeout):
-            return (dict(runner._running_agents), False)
-        runner._drain_active_agents = AsyncMock(side_effect=_drain)
-        runner._launch_detached_restart_command = AsyncMock()
-
-        runner._running_agent_count = lambda: len(runner._running_agents)
-        runner._interrupt_running_agents = lambda msg: None
-        runner._update_runtime_status = lambda *a, **kw: None
-
-        def _finalize(active_agents):
-            for agent in active_agents.values():
-                if hasattr(agent, "close"):
-                    agent.close()
-        runner._finalize_shutdown_agents = _finalize
+        runner._restart_drain_timeout = 5.0
+        runner._voice_mode = {}
+        runner._session_model_overrides = {}
+        runner._update_prompt_pending = {}
+        runner._busy_input_mode = "interrupt"
+        runner._agent_cache = {}
+        runner._agent_cache_lock = threading.Lock()
+        runner._shutdown_all_gateway_honcho = lambda: None
+        runner._update_runtime_status = MagicMock()
 
         mock_agent_1 = MagicMock()
         mock_agent_2 = MagicMock()
@@ -232,8 +229,6 @@ class TestGatewayCleanupWiring:
             "session-1": mock_agent_1,
             "session-2": mock_agent_2,
         }
-
-        from gateway.run import GatewayRunner
 
         loop = asyncio.new_event_loop()
         try:
