@@ -2760,6 +2760,9 @@ class GatewayRunner:
         if canonical == "update":
             return await self._handle_update_command(event)
 
+        if canonical == "debug":
+            return await self._handle_debug_command(event)
+
         if canonical == "title":
             return await self._handle_title_command(event)
 
@@ -6500,6 +6503,61 @@ class GatewayRunner:
         Platform.FEISHU, Platform.WECOM, Platform.WECOM_CALLBACK, Platform.WEIXIN, Platform.BLUEBUBBLES, Platform.LOCAL,
     })
 
+    async def _handle_debug_command(self, event: MessageEvent) -> str:
+        """Handle /debug — upload debug report + logs and return paste URLs."""
+        import asyncio
+        from hermes_cli.debug import (
+            _capture_dump, collect_debug_report, _read_full_log,
+            upload_to_pastebin,
+        )
+
+        loop = asyncio.get_running_loop()
+
+        # Run blocking I/O (dump capture, log reads, uploads) in a thread.
+        def _collect_and_upload():
+            dump_text = _capture_dump()
+            report = collect_debug_report(log_lines=200, dump_text=dump_text)
+            agent_log = _read_full_log("agent")
+            gateway_log = _read_full_log("gateway")
+
+            if agent_log:
+                agent_log = dump_text + "\n\n--- full agent.log ---\n" + agent_log
+            if gateway_log:
+                gateway_log = dump_text + "\n\n--- full gateway.log ---\n" + gateway_log
+
+            urls = {}
+            failures = []
+
+            try:
+                urls["Report"] = upload_to_pastebin(report)
+            except Exception as exc:
+                return f"✗ Failed to upload debug report: {exc}"
+
+            if agent_log:
+                try:
+                    urls["agent.log"] = upload_to_pastebin(agent_log)
+                except Exception:
+                    failures.append("agent.log")
+
+            if gateway_log:
+                try:
+                    urls["gateway.log"] = upload_to_pastebin(gateway_log)
+                except Exception:
+                    failures.append("gateway.log")
+
+            lines = ["**Debug report uploaded:**", ""]
+            label_width = max(len(k) for k in urls)
+            for label, url in urls.items():
+                lines.append(f"`{label:<{label_width}}`  {url}")
+
+            if failures:
+                lines.append(f"\n_(failed to upload: {', '.join(failures)})_")
+
+            lines.append("\nShare these links with the Hermes team for support.")
+            return "\n".join(lines)
+
+        return await loop.run_in_executor(None, _collect_and_upload)
+
     async def _handle_update_command(self, event: MessageEvent) -> str:
         """Handle /update command — update Hermes Agent to the latest version.
 
@@ -7425,9 +7483,11 @@ class GatewayRunner:
                     _pl = get_tool_preview_max_len()
                     import json as _json
                     args_str = _json.dumps(args, ensure_ascii=False, default=str)
-                    _cap = _pl if _pl > 0 else 200
-                    if len(args_str) > _cap:
-                        args_str = args_str[:_cap - 3] + "..."
+                    # When tool_preview_length is 0 (default), don't truncate
+                    # in verbose mode — the user explicitly asked for full
+                    # detail.  Platform message-length limits handle the rest.
+                    if _pl > 0 and len(args_str) > _pl:
+                        args_str = args_str[:_pl - 3] + "..."
                     msg = f"{emoji} {tool_name}({list(args.keys())})\n{args_str}"
                 elif preview:
                     msg = f"{emoji} {tool_name}: \"{preview}\""
@@ -7737,10 +7797,18 @@ class GatewayRunner:
                     from gateway.stream_consumer import GatewayStreamConsumer, StreamConsumerConfig
                     _adapter = self.adapters.get(source.platform)
                     if _adapter:
+                        # Platforms that don't support editing sent messages
+                        # (e.g. WeChat) must not show a cursor in intermediate
+                        # sends — the cursor would be permanently visible because
+                        # it can never be edited away.  Use an empty cursor for
+                        # such platforms so streaming still delivers the final
+                        # response, just without the typing indicator.
+                        _adapter_supports_edit = getattr(_adapter, "SUPPORTS_MESSAGE_EDITING", True)
+                        _effective_cursor = _scfg.cursor if _adapter_supports_edit else ""
                         _consumer_cfg = StreamConsumerConfig(
                             edit_interval=_scfg.edit_interval,
                             buffer_threshold=_scfg.buffer_threshold,
-                            cursor=_scfg.cursor,
+                            cursor=_effective_cursor,
                         )
                         _stream_consumer = GatewayStreamConsumer(
                             adapter=_adapter,

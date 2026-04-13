@@ -156,6 +156,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
                gateway_only=True),
     CommandDef("diff", "Show git diff of current changes", "Info",
                args_hint="[--stat|--cached|<path>]"),
+    CommandDef("debug", "Upload debug report (system info + logs) and get shareable links", "Info"),
 
     # Exit
     CommandDef("quit", "Exit the CLI", "Exit",
