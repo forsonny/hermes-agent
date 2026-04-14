@@ -346,6 +346,4 @@ def get_random_tip(exclude_recent: int = 0) -> str:
     return random.choice(TIPS)
 
 
-def get_tip_count() -> int:
-    """Return the total number of tips available."""
-    return len(TIPS)
+

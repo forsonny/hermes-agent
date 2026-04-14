@@ -710,9 +710,17 @@ class AIAgent:
         # on /v1/chat/completions by both OpenAI and OpenRouter.  Also
         # auto-upgrade for direct OpenAI URLs (api.openai.com) since all
         # newer tool-calling models prefer Responses there.
-        if self.api_mode == "chat_completions" and (
-            self._is_direct_openai_url()
-            or self._model_requires_responses_api(self.model)
+        # ACP runtimes are excluded: CopilotACPClient handles its own
+        # routing and does not implement the Responses API surface.
+        if (
+            self.api_mode == "chat_completions"
+            and self.provider != "copilot-acp"
+            and not str(self.base_url or "").lower().startswith("acp://copilot")
+            and not str(self.base_url or "").lower().startswith("acp+tcp://")
+            and (
+                self._is_direct_openai_url()
+                or self._model_requires_responses_api(self.model)
+            )
         ):
             self.api_mode = "codex_responses"
 
@@ -1333,6 +1341,22 @@ class AIAgent:
 
         if _selected_engine is not None:
             self.context_compressor = _selected_engine
+            # Resolve context_length for plugin engines — mirrors switch_model() path
+            from agent.model_metadata import get_model_context_length
+            _plugin_ctx_len = get_model_context_length(
+                self.model,
+                base_url=self.base_url,
+                api_key=getattr(self, "api_key", ""),
+                config_context_length=_config_context_length,
+                provider=self.provider,
+            )
+            self.context_compressor.update_model(
+                model=self.model,
+                context_length=_plugin_ctx_len,
+                base_url=self.base_url,
+                api_key=getattr(self, "api_key", ""),
+                provider=self.provider,
+            )
             if not self.quiet_mode:
                 logger.info("Using context engine: %s", _selected_engine.name)
         else:
