@@ -26,10 +26,10 @@ def _make_compressor():
     compressor._summary_failure_cooldown_until = 0.0
     compressor.summary_model = None
     compressor.model = "test-model"
-    compressor.provider = "test-provider"
-    compressor.base_url = ""
-    compressor.api_key = ""
-    compressor.api_mode = ""
+    compressor.provider = "test"
+    compressor.base_url = "http://localhost"
+    compressor.api_key = "test-key"
+    compressor.api_mode = "chat_completions"
     return compressor
 
 

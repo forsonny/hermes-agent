@@ -23,10 +23,7 @@ Usage:
     all_tools = resolve_toolset("full_stack")
 """
 
-import logging
 from typing import List, Dict, Any, Set, Optional
-
-logger = logging.getLogger(__name__)
 
 
 # Shared tool list for CLI and all messaging platform toolsets.
@@ -362,6 +359,12 @@ TOOLSETS = {
         "includes": []
     },
 
+    "hermes-qqbot": {
+        "description": "QQBot toolset - QQ messaging via Official Bot API v2 (full access)",
+        "tools": _HERMES_CORE_TOOLS,
+        "includes": []
+    },
+
     "hermes-wecom": {
         "description": "WeCom bot toolset - enterprise WeChat messaging (full access)",
         "tools": _HERMES_CORE_TOOLS,
@@ -389,7 +392,7 @@ TOOLSETS = {
     "hermes-gateway": {
         "description": "Gateway toolset - union of all messaging platform tools",
         "tools": [],
-        "includes": ["hermes-telegram", "hermes-discord", "hermes-whatsapp", "hermes-slack", "hermes-signal", "hermes-bluebubbles", "hermes-homeassistant", "hermes-email", "hermes-sms", "hermes-mattermost", "hermes-matrix", "hermes-dingtalk", "hermes-feishu", "hermes-wecom", "hermes-wecom-callback", "hermes-weixin", "hermes-webhook"]
+        "includes": ["hermes-telegram", "hermes-discord", "hermes-whatsapp", "hermes-slack", "hermes-signal", "hermes-bluebubbles", "hermes-homeassistant", "hermes-email", "hermes-sms", "hermes-mattermost", "hermes-matrix", "hermes-dingtalk", "hermes-feishu", "hermes-wecom", "hermes-wecom-callback", "hermes-weixin", "hermes-qqbot", "hermes-webhook"]
     }
 }
 
@@ -452,9 +455,9 @@ def resolve_toolset(name: str, visited: Set[str] = None) -> List[str]:
         if name in _get_plugin_toolset_names():
             try:
                 from tools.registry import registry
-                return [e.name for e in registry._tools.values() if e.toolset == name]
-            except Exception as exc:
-                logger.debug("plugin toolset %s lookup failed: %s", name, exc)
+                return registry.get_tool_names_for_toolset(name)
+            except Exception:
+                pass
         return []
 
     # Collect direct tools
@@ -498,9 +501,9 @@ def _get_plugin_toolset_names() -> Set[str]:
     try:
         from tools.registry import registry
         return {
-            entry.toolset
-            for entry in registry._tools.values()
-            if entry.toolset not in TOOLSETS
+            toolset_name
+            for toolset_name in registry.get_registered_toolset_names()
+            if toolset_name not in TOOLSETS
         }
     except Exception:
         return set()
@@ -521,13 +524,13 @@ def get_all_toolsets() -> Dict[str, Dict[str, Any]]:
         if ts_name not in result:
             try:
                 from tools.registry import registry
-                tools = [e.name for e in registry._tools.values() if e.toolset == ts_name]
+                tools = registry.get_tool_names_for_toolset(ts_name)
                 result[ts_name] = {
                     "description": f"Plugin toolset: {ts_name}",
                     "tools": tools,
                 }
-            except Exception as exc:
-                logger.debug("plugin toolset %s discovery failed: %s", ts_name, exc)
+            except Exception:
+                pass
     return result
 
 

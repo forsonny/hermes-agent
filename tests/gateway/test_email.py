@@ -335,10 +335,11 @@ class TestChannelDirectory(unittest.TestCase):
 
     def test_email_in_session_discovery(self):
         from gateway.config import Platform
-        # Platform enum drives session-based discovery in build_channel_directory.
-        # Email does not have a dedicated adapter builder, so it must be present
-        # in the enum to be picked up by the generic Platform iteration loop.
-        self.assertIn(Platform.EMAIL, list(Platform))
+        # Verify email is a Platform enum member — the dynamic loop in
+        # build_channel_directory iterates all Platform members, so email
+        # is included automatically as long as it's in the enum.
+        email_values = [p.value for p in Platform]
+        self.assertIn("email", email_values)
 
 
 class TestGatewaySetup(unittest.TestCase):
