@@ -191,12 +191,14 @@ AUTHOR_MAP = {
     "yangzhi.see@gmail.com": "SeeYangZhi",
     "yongtenglei@gmail.com": "yongtenglei",
     "young@YoungdeMacBook-Pro.local": "YoungYang963",
-    "ysfalweshcan@gmail.com": "Awsh1",
+    "ysfalweshcan@gmail.com": "Junass1",
     "ysfwaxlycan@gmail.com": "WAXLYY",
     "yusufalweshdemir@gmail.com": "Dusk1e",
     "zhouboli@gmail.com": "zhouboli",
     "zqiao@microsoft.com": "tomqiaozc",
     "zzn+pa@zzn.im": "xinbenlv",
+    "zaynjarvis@gmail.com": "ZaynJarvis",
+    "zhiheng.liu@bytedance.com": "ZaynJarvis",
 }
 
 
